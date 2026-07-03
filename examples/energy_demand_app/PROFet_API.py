@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
+import pandas as pd
+
 PROFET_BASE_URL = "https://flexibilitysuite.byggforsk.no/index.html"
 PROFET_VALIDATE_URL = f"{PROFET_BASE_URL}/api/Profet/Validate"
 PROFET_RUN_URL = f"{PROFET_BASE_URL}/api/Profet"
@@ -97,3 +101,100 @@ def build_areas_for_one_building(
             efficiency_key=efficiency_key,
         )
     }
+
+
+def build_tout_from_dataframe(
+    df_temperature: pd.DataFrame,
+    selected_year: int,
+    time_col: str = "time",
+    temperature_col: str = "temperature_C",
+) -> tuple[str, list[float]]:
+    """
+    Extract a full year of hourly temperatures from a DataFrame.
+
+    Expected columns:
+      time
+      temperature_C
+
+    Returns:
+      StartDate = YYYY-01-01
+      Tout = hourly temperatures
+    """
+
+    df = df_temperature.copy()
+
+    df[time_col] = pd.to_datetime(df[time_col])
+
+    df_year = df[df[time_col].dt.year == selected_year].copy()
+    df_year = df_year.sort_values(time_col).reset_index(drop=True)
+
+    if df_year.empty:
+        raise ValueError(f"No temperature data found for year {selected_year}.")
+
+    first_time = df_year.loc[0, time_col]
+
+    if first_time.month != 1 or first_time.day != 1 or first_time.hour != 0:
+        raise ValueError(
+            f"Temperature series for {selected_year} must start on 1 January at 00:00. "
+            f"First timestamp is {first_time}."
+        )
+
+    temperatures_C = df_year[temperature_col].astype(float).to_list()
+
+    start_date = f"{selected_year}-01-01"
+
+    if not temperatures_C:
+        raise ValueError("temperatures_C is empty.")
+
+    if len(temperatures_C) not in {8760, 8784}:
+        raise ValueError(
+            f"Expected 8760 hours for a regular year or 8784 for a leap year. "
+            f"Got {len(temperatures_C)} temperature values."
+        )
+
+    return start_date, temperatures_C
+
+
+def build_profet_v2_payload(
+    df_temperature: pd.DataFrame,
+    selected_year: int,
+    building_category: str,
+    floor_area_m2: float,
+    efficiency_key: str = "Reg",
+) -> dict[str, Any]:
+    """
+    Build a PROFet v2 payload based on the sample request structure:
+
+      StartDate
+      Areas
+      TimeSeries.Tout
+      RetInd
+      Country
+
+    Uses human-readable category names: "Office", "House", "Apartment", etc.
+    """
+
+    start_date, tout = build_tout_from_dataframe(
+        df_temperature=df_temperature,
+        selected_year=selected_year,
+        time_col="time",
+        temperature_col="temperature_C",
+    )
+
+    areas = build_areas_for_one_building(
+        building_category=building_category,
+        floor_area_m2=floor_area_m2,
+        efficiency_key=efficiency_key,
+    )
+
+    payload = {
+        "StartDate": start_date,
+        "Areas": areas,
+        "TimeSeries": {
+            "Tout": tout,
+        },
+        "RetInd": True,
+        "Country": "Norway",
+    }
+
+    return payload
