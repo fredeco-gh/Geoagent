@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
 from typing import Any
 
 import pandas as pd
+import requests
 
 PROFET_BASE_URL = "https://flexibilitysuite.byggforsk.no/index.html"
 PROFET_VALIDATE_URL = f"{PROFET_BASE_URL}/api/Profet/Validate"
 PROFET_RUN_URL = f"{PROFET_BASE_URL}/api/Profet"
 
+token = os.getenv("PROFET_API_TOKEN")
 
 PROFET_BUILDING_CATEGORIES = {
     "House",
@@ -198,3 +202,89 @@ def build_profet_v2_payload(
     }
 
     return payload
+
+
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    timeout: int = 180,
+    token: str | None = token,
+) -> dict[str, Any]:
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=timeout,
+    )
+
+    if response.status_code == 401:
+        raise RuntimeError(
+            "PROFet API responded 401 Unauthorized.\n"
+            "That means the Bearer-token is missing, wrong or expired, "
+            "or that your account does not have access to this API.\n"
+            f"Response headers: {dict(response.headers)}"
+        )
+
+    if not response.ok:
+        raise RuntimeError(
+            f"PROFet API error\n"
+            f"URL: {url}\n"
+            f"Status: {response.status_code}\n"
+            f"Response:\n{response.text}"
+        )
+
+    return response.json()
+
+
+def validate_profet_payload(payload: dict[str, Any], token: str | None = token) -> dict[str, Any]:
+    return post_json(url=PROFET_VALIDATE_URL, payload=payload, timeout=60, token=token)
+
+
+def run_profet(payload: dict[str, Any], token: str | None = token) -> dict[str, Any]:
+    return post_json(url=PROFET_RUN_URL, payload=payload, timeout=180, token=token)
+
+
+def run_profet_for_building(
+    df_temperature: pd.DataFrame,
+    selected_year: int,
+    building_category: str,
+    floor_area_m2: float,
+    efficiency_key: str = "Reg",
+    token: str | None = token,
+) -> dict[str, Any]:
+    """
+    Full PROFet flow:
+      1. build payload
+      2. validate payload
+      3. run PROFet
+      4. return raw JSON response
+    """
+
+    payload = build_profet_v2_payload(
+        df_temperature=df_temperature,
+        selected_year=selected_year,
+        building_category=building_category,
+        floor_area_m2=floor_area_m2,
+        efficiency_key=efficiency_key,
+    )
+
+    print("Payload preview:")
+    print(json.dumps(payload, indent=2)[:3000])
+
+    print("\nValidating PROFet payload...")
+    validation_result = validate_profet_payload(payload, token)
+
+    print("Validation result:")
+    print(validation_result)
+
+    print("\nRunning PROFet...")
+    result = run_profet(payload, token)
+
+    return result
