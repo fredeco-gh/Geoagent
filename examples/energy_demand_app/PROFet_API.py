@@ -28,6 +28,71 @@ PROFET_BUILDING_CATEGORIES = {
     "Other",
 }
 
+TYPICAL_AREAS_M2 = {
+    "House": 160.0,
+    "Apartment": 1800.0,
+    "Office": 2000.0,
+    "Shop": 1000.0,
+    "Hotel": 5000.0,
+    "Kindergarten": 700.0,
+    "School": 5000.0,
+    "University": 15000.0,
+    "Culture_Sport": 3000.0,
+    "Nursing_home": 5000.0,
+    "Hospital": 30000.0,
+    "Other": 1000.0,
+}
+
+
+def map_matrikkel_building_type_to_profet_category(
+    building_type_code: int | str,
+) -> str:
+    code = int(building_type_code)
+
+    # Småhus, enebolig, tomannsbolig, rekkehus
+    if 111 <= code <= 136:
+        return "House"
+
+    # Store boligbygg / blokker
+    if 141 <= code <= 159 or code == 523:
+        return "Apartment"
+
+    # Hotell / overnatting
+    if 511 <= code <= 529 and code != 523:
+        return "Hotel"
+
+    # Kontor
+    if 311 <= code <= 319 and code != 313:
+        return "Office"
+
+    # Butikk / forretning
+    if 321 <= code <= 329:
+        return "Shop"
+
+    # Skole / universitet
+    if 611 <= code <= 619:
+        return "School"
+
+    if 621 <= code <= 629 and code != 623:
+        return "University"
+
+    # Barnehage
+    if code == 612:
+        return "Kindergarten"
+
+    # Sykehus / institusjon
+    if 719 <= code <= 739:
+        return "Hospital"
+
+    # Sykehjem / omsorg
+    if 721 <= code <= 729:
+        return "Nursing_home"
+
+    if code == 611 or 641 <= code <= 669:
+        return "Culture_Sport"
+
+    return "Other"
+
 
 PROFET_EFFICIENCY_KEYS = {
     "Reg",  # Regular
@@ -38,7 +103,7 @@ PROFET_EFFICIENCY_KEYS = {
 
 
 def build_area_distribution(
-    floor_area_m2: float,
+    usable_floor_area_m2: float,
     efficiency_key: str = "Reg",
 ) -> dict[str, float]:
     """
@@ -48,7 +113,7 @@ def build_area_distribution(
     (typically "Reg") and the others are set to 0.
     """
 
-    if floor_area_m2 <= 0:
+    if usable_floor_area_m2 <= 0:
         raise ValueError("floor_area_m2 must be greater than 0.")
 
     if efficiency_key not in PROFET_EFFICIENCY_KEYS:
@@ -64,14 +129,14 @@ def build_area_distribution(
         "Vef": 0.0,
     }
 
-    area_distribution[efficiency_key] = float(floor_area_m2)
+    area_distribution[efficiency_key] = float(usable_floor_area_m2)
 
     return area_distribution
 
 
 def build_areas_for_one_building(
     building_category: str,
-    floor_area_m2: float,
+    usable_floor_area_m2: float,
     efficiency_key: str = "Reg",
 ) -> dict[str, dict[str, float]]:
     """
@@ -101,7 +166,7 @@ def build_areas_for_one_building(
 
     return {
         building_category: build_area_distribution(
-            floor_area_m2=floor_area_m2,
+            usable_floor_area_m2=usable_floor_area_m2,
             efficiency_key=efficiency_key,
         )
     }
@@ -163,7 +228,7 @@ def build_profet_v2_payload(
     df_temperature: pd.DataFrame,
     selected_year: int,
     building_category: str,
-    floor_area_m2: float,
+    usable_floor_area_m2: float,
     efficiency_key: str = "Reg",
 ) -> dict[str, Any]:
     """
@@ -187,7 +252,7 @@ def build_profet_v2_payload(
 
     areas = build_areas_for_one_building(
         building_category=building_category,
-        floor_area_m2=floor_area_m2,
+        usable_floor_area_m2=usable_floor_area_m2,
         efficiency_key=efficiency_key,
     )
 
@@ -254,8 +319,8 @@ def run_profet(payload: dict[str, Any], token: str | None = token) -> dict[str, 
 def run_profet_for_building(
     df_temperature: pd.DataFrame,
     selected_year: int,
-    building_category: str,
-    floor_area_m2: float,
+    building_type_code: int,
+    usable_floor_area_m2: float | None,
     efficiency_key: str = "Reg",
     token: str | None = token,
 ) -> dict[str, Any]:
@@ -267,11 +332,16 @@ def run_profet_for_building(
       4. return raw JSON response
     """
 
+    building_category = map_matrikkel_building_type_to_profet_category(building_type_code)
+
+    if usable_floor_area_m2 is None:
+        usable_floor_area_m2 = TYPICAL_AREAS_M2[building_category]
+
     payload = build_profet_v2_payload(
         df_temperature=df_temperature,
         selected_year=selected_year,
         building_category=building_category,
-        floor_area_m2=floor_area_m2,
+        usable_floor_area_m2=usable_floor_area_m2,
         efficiency_key=efficiency_key,
     )
 
