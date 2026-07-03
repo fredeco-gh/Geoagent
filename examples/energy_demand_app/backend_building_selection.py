@@ -430,9 +430,7 @@ def api_building_temperature(
 
     df = fetch_building_year_temperature(lat=lat, lon=lon, year=year)
     records = (
-        df[["time_oslo", "temperature_C"]]
-        .assign(time_oslo=df["time_oslo"].astype(str))
-        .to_dict(orient="records")
+        df[["time", "temperature_C"]].assign(time=df["time"].astype(str)).to_dict(orient="records")
     )
     print(f"[Open-Meteo] {len(records)} hours saved for ({lat:.5f}, {lon:.5f}), year {year}")
     return {"lat": lat, "lon": lon, "year": year, "hours": len(records), "records": records}
@@ -446,7 +444,7 @@ def health() -> dict:
 def _build_temperature_report_html(bygningsnummer: str, year: int, records: list[dict]) -> str:
     import json as _json
 
-    labels = _json.dumps([r["time_oslo"] for r in records])
+    labels = _json.dumps([r["time"] for r in records])
     values = _json.dumps([r["temperature_C"] for r in records])
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -529,10 +527,35 @@ def make_generate_temperature_action():
                 None, lambda: fetch_building_year_temperature(lat=lat, lon=lon, year=year)
             )
             records = (
-                df[["time_oslo", "temperature_C"]]
-                .assign(time_oslo=df["time_oslo"].astype(str))
+                df[["time", "temperature_C"]]
+                .assign(time=df["time"].astype(str))
                 .to_dict(orient="records")
             )
+
+            # Energy demand — no-op until _extract_timeseries and
+            # _make_synthetic_timeseries are implemented.
+            bygningstype_kode = args.get("bygningstype_kode")
+            bruksareal_raw = args.get("bruksareal_totalt")
+            bruksareal = float(bruksareal_raw) if bruksareal_raw is not None else None
+            if bygningstype_kode is not None:
+                try:
+                    from energy_demand import get_energy_demand_timeseries
+
+                    _demand = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: get_energy_demand_timeseries(
+                            df_temperature=df,
+                            selected_year=year,
+                            building_type_code=int(bygningstype_kode),
+                            usable_floor_area_m2=bruksareal,
+                        ),
+                    )
+                    # TODO: use _demand (display in UI, add to report, etc.)
+                except NotImplementedError:
+                    pass
+                except Exception as exc:
+                    print(f"[Energy demand] {exc}")
+
             html = _build_temperature_report_html(bygningsnummer, year, records)
 
             run_no = _temperature_report_count.get(session.session_id, 0) + 1

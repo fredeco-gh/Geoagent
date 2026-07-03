@@ -29,7 +29,7 @@ def fetch_temperature_open_meteo_era5_land(
 
     return pd.DataFrame(
         {
-            "time_oslo": pd.to_datetime(data["hourly"]["time"]),
+            "time": pd.to_datetime(data["hourly"]["time"]),
             "temperature_C": data["hourly"]["temperature_2m"],
         }
     )
@@ -42,7 +42,7 @@ def fetch_building_year_temperature(
 ) -> pd.DataFrame:
     """Fetch a full calendar year of hourly ERA5-Land 2 m temperature via Open-Meteo.
 
-    Returns a DataFrame with columns: time_oslo, temperature_C.
+    Returns a DataFrame with columns: time, temperature_C.
     """
     return fetch_temperature_open_meteo_era5_land(
         lat=lat,
@@ -63,4 +63,4 @@ if __name__ == "__main__":
     print(f"Hours: {len(df)}")
     print(f"Mean temperature: {df['temperature_C'].mean():.2f} °C")
     print(df["temperature_C"].tolist()[:5])
-    print(df["time_oslo"].astype(str).tolist()[:5])
+    print(df["time"].astype(str).tolist()[:5])

@@ -177,7 +177,7 @@ def fetch_building_year_temperature(
 def add_norwegian_local_time(df: pd.DataFrame) -> pd.DataFrame:
     """Add a Europe/Oslo local-time column to a UTC-indexed temperature DataFrame."""
     df = df.copy()
-    df["time_oslo"] = df["time_utc"].dt.tz_convert("Europe/Oslo")
+    df["time"] = df["time_utc"].dt.tz_convert("Europe/Oslo")
     return df
 
 
@@ -198,6 +198,6 @@ if __name__ == "__main__":
     print(f"Mean temperature: {df['temperature_C'].mean():.2f} °C")
 
     temperature_series = df["temperature_C"].to_list()
-    timestamps_series = df["time_oslo"].astype(str).to_list()
+    timestamps_series = df["time"].astype(str).to_list()
     print(temperature_series[:5])
     print(timestamps_series[:5])
