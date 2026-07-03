@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import tempfile
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from urllib.parse import urlencode
 
 import geopandas as gpd
 import pandas as pd
@@ -20,16 +20,12 @@ DEFAULT_EPSG = 25833
 DEFAULT_RADIUS_M = 50.0
 MAX_RADIUS_M = 200.0
 
-# Typename cache: in-process (cleared on restart) + on-disk (survives restarts).
 _cached_typename: str | None = None
 _cached_type_map: dict[str, dict] | None = None
 
 _TYPENAME_CACHE_FILE = Path.home() / ".cache" / "jutul_agent" / "wfs_typename.txt"
 
-# Known typename for wfs.matrikkelen-bygningspunkt — used directly so GetCapabilities
-# (a heavy, unreliable endpoint) is never called.  Override by writing a different value
-# to _TYPENAME_CACHE_FILE if the service ever renames its feature type.
-_DEFAULT_TYPENAME = "app:Bygningspunkt"
+_DEFAULT_TYPENAME = "app:Bygning"
 
 
 def _read_typename_from_disk() -> str | None:
@@ -39,14 +35,6 @@ def _read_typename_from_disk() -> str | None:
     except OSError:
         pass
     return None
-
-
-def _write_typename_to_disk(name: str) -> None:
-    try:
-        _TYPENAME_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _TYPENAME_CACHE_FILE.write_text(name)
-    except OSError:
-        pass
 
 
 router = APIRouter()
@@ -90,16 +78,59 @@ app.add_middleware(
 app.include_router(router)
 
 
-def get_wfs_typename() -> str:
-    """Return the WFS feature type name for Matrikkelen Bygningspunkt.
+_wfs_caps: dict | None = None
 
-    Lookup order:
-      1. In-process cache (cleared on server restart)
-      2. On-disk cache at ~/.cache/jutul_agent/wfs_typename.txt (survives restarts)
-      3. Built-in default (_DEFAULT_TYPENAME) — GetCapabilities is never called
-    """
+
+def _get_wfs_capabilities() -> dict:
+    """Call GetCapabilities once (cached per process) and return discovered WFS info."""
+    global _wfs_caps
+    if _wfs_caps is not None:
+        return _wfs_caps
+
+    result: dict = {"typename": None, "ns_uri": None, "output_formats": []}
+    try:
+        r = requests.get(
+            WFS_BASE_URL,
+            params={"service": "WFS", "request": "GetCapabilities"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+
+        typename: str | None = None
+        for wfs_ns in ("http://www.opengis.net/wfs/2.0", "http://www.opengis.net/wfs"):
+            for ft in root.findall(f".//{{{wfs_ns}}}FeatureType"):
+                name_el = ft.find(f"{{{wfs_ns}}}Name")
+                txt = (name_el.text or "").strip() if name_el is not None else ""
+                if "bygning" in txt.lower():
+                    typename = txt
+            if typename:
+                break
+
+        ns_uri: str | None = None
+        if typename and ":" in typename:
+            prefix = typename.split(":")[0]
+            m = re.search(rf'xmlns:{re.escape(prefix)}="([^"]+)"', r.text)
+            if m:
+                ns_uri = m.group(1)
+
+        result = {"typename": typename, "ns_uri": ns_uri}
+    except Exception as exc:
+        print(f"[WFS] GetCapabilities failed: {exc}")
+
+    _wfs_caps = result
+    return _wfs_caps
+
+
+def get_wfs_typename() -> str:
+    """Return the WFS feature type name, discovered via GetCapabilities."""
     global _cached_typename
     if _cached_typename is not None:
+        return _cached_typename
+
+    caps = _get_wfs_capabilities()
+    if caps["typename"]:
+        _cached_typename = caps["typename"]
         return _cached_typename
 
     disk_name = _read_typename_from_disk()
@@ -108,7 +139,6 @@ def get_wfs_typename() -> str:
         return disk_name
 
     _cached_typename = _DEFAULT_TYPENAME
-    _write_typename_to_disk(_DEFAULT_TYPENAME)
     return _DEFAULT_TYPENAME
 
 
@@ -144,10 +174,11 @@ def fetch_building_points_from_wfs(
 
     Returns a GeoDataFrame of building points in the area.
     """
-    type_name = get_wfs_typename()
+    caps = _get_wfs_capabilities()
+    type_name = caps["typename"] or get_wfs_typename()
     minx, miny, maxx, maxy = make_bbox_utm(lat, lon, radius_m, epsg)
 
-    params = {
+    params: dict[str, str] = {
         "service": "WFS",
         "version": "2.0.0",
         "request": "GetFeature",
@@ -155,23 +186,34 @@ def fetch_building_points_from_wfs(
         "srsName": f"EPSG:{epsg}",
         "bbox": f"{minx},{miny},{maxx},{maxy},EPSG:{epsg}",
     }
+    if ":" in type_name and caps["ns_uri"]:
+        prefix = type_name.split(":")[0]
+        params["namespaces"] = f"xmlns({prefix},{caps['ns_uri']})"
 
-    r = requests.get(f"{WFS_BASE_URL}?{urlencode(params)}", timeout=60)
-    r.raise_for_status()
+    r = requests.get(WFS_BASE_URL, params=params, timeout=60)
+    if not r.ok:
+        print(f"[WFS] HTTP {r.status_code}:\n{r.text[:1000]}")
+        return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{epsg}")
 
     if not r.content:
         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{epsg}")
 
-    # Write to a temp file — more robust than streaming GML directly into GeoPandas/Fiona.
+    # A WFS server can return HTTP 200 with an XML exception report instead of data.
+    snippet = r.content[:1000].decode("utf-8", errors="replace")
+    if "ExceptionReport" in snippet or "ServiceException" in snippet:
+        print(f"[WFS] Server returned an exception report:\n{snippet}")
+        return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{epsg}")
+
+    import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".gml", delete=False) as tmp:
         tmp.write(r.content)
         tmp_path = Path(tmp.name)
 
     try:
         gdf = gpd.read_file(tmp_path)
-    except IndexError:
-        # pyogrio raises IndexError when the GML has no feature layers (empty
-        # WFS response with valid XML headers but zero features).
+    except (IndexError, Exception) as exc:
+        print(f"[WFS] Failed to parse response ({type(exc).__name__}): {snippet[:500]}")
         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{epsg}")
     finally:
         tmp_path.unlink(missing_ok=True)
