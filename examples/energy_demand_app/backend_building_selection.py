@@ -399,3 +399,142 @@ def api_building_temperature(
 @router.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "source": "Matrikkelen Bygningspunkt WFS", "wfs": WFS_BASE_URL}
+
+
+def _build_temperature_report_html(bygningsnummer: str, year: int, records: list[dict]) -> str:
+    import json as _json
+
+    labels = _json.dumps([r["time_oslo"] for r in records])
+    values = _json.dumps([r["temperature_C"] for r in records])
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Temperature — Building #{bygningsnummer}, {year}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    body {{ font-family: sans-serif; margin: 24px; background: #f5f5f5; }}
+    h1 {{ font-size: 1.1rem; color: #333; margin-bottom: 16px; }}
+    .chart-wrap {{ background: #fff; border-radius: 8px; padding: 20px;
+                  box-shadow: 0 1px 4px rgba(0,0,0,.1); }}
+  </style>
+</head>
+<body>
+  <h1>Temperature — Building #{bygningsnummer}, {year}</h1>
+  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  <script>
+    new Chart(document.getElementById('chart'), {{
+      type: 'line',
+      data: {{
+        labels: {labels},
+        datasets: [{{ label: 'Temperature (°C)', data: {values},
+          borderColor: '#3498db', borderWidth: 1, pointRadius: 0, tension: 0.1 }}]
+      }},
+      options: {{
+        responsive: true,
+        plugins: {{ legend: {{ display: false }} }},
+        scales: {{
+          x: {{ ticks: {{ maxTicksLimit: 12, maxRotation: 0 }} }},
+          y: {{ title: {{ display: true, text: '°C' }} }}
+        }}
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+
+
+_temperature_report_count: dict[str, int] = {}
+
+
+def make_generate_temperature_action():
+    """Action handler for the energy panel's 'Generate temperature data' button."""
+    import asyncio
+    import uuid
+    from collections.abc import Awaitable, Callable
+    from typing import Any
+
+    from jutul_agent.session import Session
+
+    async def generate_temperature_action(
+        session: Session,
+        args: dict[str, Any],
+        send_wire: Callable[[dict[str, Any]], Awaitable[None]],
+        _queue_ui_event: Callable[[Any], None],
+    ) -> None:
+        lat = float(args.get("lat", 0))
+        lon = float(args.get("lon", 0))
+        year = int(args.get("year", 2023))
+        bygningsnummer = str(args.get("bygningsnummer", "?"))
+        tool_call_id = f"temp-{uuid.uuid4().hex[:8]}"
+
+        await send_wire(
+            {
+                "type": "tool",
+                "event": "started",
+                "name": "generate_temperature",
+                "label": f"Fetch temperature — building #{bygningsnummer}, {year}",
+                "tool_call_id": tool_call_id,
+                "args": args,
+                "content": None,
+            }
+        )
+
+        try:
+            from open_meteo_timeseries import fetch_building_year_temperature
+
+            df = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: fetch_building_year_temperature(lat=lat, lon=lon, year=year)
+            )
+            records = (
+                df[["time_oslo", "temperature_C"]]
+                .assign(time_oslo=df["time_oslo"].astype(str))
+                .to_dict(orient="records")
+            )
+            html = _build_temperature_report_html(bygningsnummer, year, records)
+
+            run_no = _temperature_report_count.get(session.session_id, 0) + 1
+            _temperature_report_count[session.session_id] = run_no
+            safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in bygningsnummer)
+            rel = f"artifacts/temperature-{safe_id}-{year}-{run_no}.html"
+            out = session.output_dir / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(html, encoding="utf-8")
+            artifact_payload = {
+                "path": rel,
+                "mime": "text/html",
+                "format": "html",
+                "caption": f"Temperature — building #{bygningsnummer}, {year}",
+                "kind": "report",
+                "slot": f"temperature-{safe_id}-{year}-{run_no}",
+            }
+            session.trace.append("artifact", artifact_payload)
+            # _run_action's send_wire does not call _flush_side_outputs after
+            # "finished" events (unlike _on_message for LLM turns), so the
+            # artifact would never reach the client. Forward the viz wire directly.
+            from jutul_agent.interfaces.server.app import artifact_wire_events
+
+            for wire in artifact_wire_events([artifact_payload], session.session_id):
+                await send_wire(wire)
+
+            await send_wire(
+                {
+                    "type": "tool",
+                    "event": "finished",
+                    "name": "generate_temperature",
+                    "tool_call_id": tool_call_id,
+                    "content": f"{len(records)} hours of temperature data ready.",
+                }
+            )
+        except Exception as exc:
+            await send_wire(
+                {
+                    "type": "tool",
+                    "event": "finished",
+                    "name": "generate_temperature",
+                    "tool_call_id": tool_call_id,
+                    "content": f"ERROR: {exc}",
+                }
+            )
+
+    return generate_temperature_action

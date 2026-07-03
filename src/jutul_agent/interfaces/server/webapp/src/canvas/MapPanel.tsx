@@ -313,6 +313,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
 
   const [energyPanelOpen, setEnergyPanelOpen] = useState(false);
   const [energyYear, setEnergyYear] = useState(2023);
+  const [energyStatus, setEnergyStatus] = useState<SimStatus | null>(null);
 
   // A ref (not a plain function) so the mount effect below — which only runs
   // once per view.id — always calls the latest version, without needing to
@@ -917,7 +918,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         </div>
         <div className="sim-tab-content active">
           <div className="sim-param-row">
-            <label htmlFor="energy-year">Year</label>
+            <label htmlFor="energy-year">Year of temperature data</label>
             <div className="sim-param-input-wrap">
               <input
                 type="number"
@@ -934,6 +935,27 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               />
             </div>
           </div>
+          <div className="sim-actions">
+            <button
+              className="btn-primary btn-run"
+              disabled={energyStatus?.kind === "running"}
+              onClick={() => {
+                if (!selectedBuilding) return;
+                setEnergyStatus({ kind: "running", message: "Fetching temperature data…" });
+                onAction("generate_temperature", {
+                  lat: selectedBuilding.lat,
+                  lon: selectedBuilding.lon,
+                  year: energyYear,
+                  bygningsnummer: selectedBuilding.bygningsnummer,
+                });
+              }}
+            >
+              ▶ Generate temperature data
+            </button>
+          </div>
+          {energyStatus ? (
+            <div className={`sim-status ${energyStatus.kind}`}>{energyStatus.message}</div>
+          ) : null}
         </div>
       </div>
     </div>

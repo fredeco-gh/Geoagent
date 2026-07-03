@@ -75,7 +75,12 @@ async def _host_factory(
 
 
 def create_geothermal_map_app() -> Any:
-    from backend_building_selection import router as building_router
+    from backend_building_selection import (
+        make_generate_temperature_action,
+    )
+    from backend_building_selection import (
+        router as building_router,
+    )
     from capability import make_run_simulation_action, make_setup_simulation_action
 
     from jutul_agent.interfaces.server.app import create_app
@@ -100,6 +105,7 @@ def create_geothermal_map_app() -> Any:
         actions={
             "run_simulation": make_run_simulation_action(str(SIMULATION_JL)),
             "setup_simulation": make_setup_simulation_action(str(SIMULATION_JL)),
+            "generate_temperature": make_generate_temperature_action(),
         },
         # Building click API — must be passed here (not via include_router after
         # the fact) so it is registered before create_app mounts the static
