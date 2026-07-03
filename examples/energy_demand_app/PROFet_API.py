@@ -94,6 +94,18 @@ def map_matrikkel_building_type_to_profet_category(
     return "Other"
 
 
+def usable_floor_area_m2_and_building_category(
+    usable_floor_area_m2: float | None, building_type_code: int
+) -> tuple[float, str]:
+
+    building_category = map_matrikkel_building_type_to_profet_category(building_type_code)
+
+    if usable_floor_area_m2 is None:
+        usable_floor_area_m2 = TYPICAL_AREAS_M2[building_category]
+
+    return usable_floor_area_m2, building_category
+
+
 PROFET_EFFICIENCY_KEYS = {
     "Reg",  # Regular
     "Eff-E",  # Efficient existing / rehabilitated
@@ -332,10 +344,9 @@ def run_profet_for_building(
       4. return raw JSON response
     """
 
-    building_category = map_matrikkel_building_type_to_profet_category(building_type_code)
-
-    if usable_floor_area_m2 is None:
-        usable_floor_area_m2 = TYPICAL_AREAS_M2[building_category]
+    usable_floor_area_m2, building_category = usable_floor_area_m2_and_building_category(
+        usable_floor_area_m2, building_type_code
+    )
 
     payload = build_profet_v2_payload(
         df_temperature=df_temperature,
