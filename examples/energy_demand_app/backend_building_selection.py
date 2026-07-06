@@ -468,73 +468,86 @@ def api_default_floor_area(
 
 
 def _build_energy_demand_report_html(
-    bygningsnummer: str, year: int, demand_type: str, records: list[dict]
+    bygningsnummer: str,
+    year: int,
+    demand_type: str,
+    records: list[dict],
+    borehole_records: list[dict] | None = None,
 ) -> str:
     import json as _json
 
     labels = _json.dumps([r["time"] for r in records])
-    values = _json.dumps([round(r["kW"], 2) for r in records])
+    demand_values = _json.dumps([round(r["kW"], 2) for r in records])
+
+    extra_canvases = ""
+    extra_chart_calls = ""
+    if borehole_records is not None:
+        t_in_vals = _json.dumps([round(r["T_in"], 2) for r in borehole_records])
+        t_out_vals = _json.dumps([round(r["T_out"], 2) for r in borehole_records])
+        dt_vals = _json.dumps([round(r["T_out"] - r["T_in"], 2) for r in borehole_records])
+        extra_canvases = (
+            '  <div class="chart-wrap"><canvas id="chart-tin"></canvas></div>\n'
+            '  <div class="chart-wrap"><canvas id="chart-tout"></canvas></div>\n'
+            '  <div class="chart-wrap"><canvas id="chart-dt"></canvas></div>'
+        )
+        extra_chart_calls = (
+            f"    makeChart('chart-tin', {t_in_vals}, '#2980b9', 'T_in [°C]');\n"
+            f"    makeChart('chart-tout', {t_out_vals}, '#27ae60', 'T_out [°C]');\n"
+            f"    makeChart('chart-dt', {dt_vals}, '#8e44ad', 'T_out - T_in [°C]');"
+        )
+
+    title = f"Building #{bygningsnummer} — {year}"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Energy demand — Building #{bygningsnummer}, {year}</title>
+  <title>{title}</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <style>
     body {{ font-family: sans-serif; margin: 24px; background: #f5f5f5; }}
     h1 {{ font-size: 1.1rem; color: #333; margin-bottom: 16px; }}
     .chart-wrap {{ background: #fff; border-radius: 8px; padding: 20px;
-                  box-shadow: 0 1px 4px rgba(0,0,0,.1); }}
+                  box-shadow: 0 1px 4px rgba(0,0,0,.1); margin-bottom: 24px; }}
   </style>
 </head>
 <body>
-  <h1>{demand_type} — Building #{bygningsnummer}, {year}</h1>
-  <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  <h1>{title}</h1>
+  <div class="chart-wrap"><canvas id="chart-demand"></canvas></div>
+{extra_canvases}
   <script>
+    const LABELS = {labels};
     const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    function fmtDate(isoStr) {{
-      const d = new Date(isoStr);
-      if (isNaN(d.getTime())) return isoStr;
-      return String(d.getDate()).padStart(2,'0') + ' ' + MONTHS[d.getMonth()];
+    function fmtDate(s) {{
+      const d = new Date(s);
+      return isNaN(d) ? s : String(d.getDate()).padStart(2,'0') + ' ' + MONTHS[d.getMonth()];
     }}
-    new Chart(document.getElementById('chart'), {{
-      type: 'line',
-      data: {{
-        labels: {labels},
-        datasets: [{{
-          label: '{demand_type} (kW)',
-          data: {values},
-          borderColor: '#e67e22',
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.1,
-          fill: false
-        }}]
-      }},
-      options: {{
-        responsive: true,
-        animation: false,
-        plugins: {{
-          legend: {{ display: false }}
+    function makeChart(id, data, color, yTitle) {{
+      new Chart(document.getElementById(id), {{
+        type: 'line',
+        data: {{
+          labels: LABELS,
+          datasets: [{{ data, borderColor: color, borderWidth: 1.5,
+            pointRadius: 0, tension: 0.1, fill: false }}]
         }},
-        scales: {{
-          x: {{
-            title: {{ display: true, text: 'Date' }},
-            ticks: {{
-              maxTicksLimit: 12,
-              maxRotation: 0,
-              callback: function(val) {{
-                return fmtDate(this.getLabelForValue(val));
+        options: {{
+          responsive: true,
+          animation: false,
+          plugins: {{ legend: {{ display: false }} }},
+          scales: {{
+            x: {{
+              title: {{ display: true, text: 'Date' }},
+              ticks: {{
+                maxTicksLimit: 12, maxRotation: 0,
+                callback(v) {{ return fmtDate(this.getLabelForValue(v)); }}
               }}
-            }}
-          }},
-          y: {{
-            title: {{ display: true, text: 'Load [kW]' }},
-            beginAtZero: true
+            }},
+            y: {{ title: {{ display: true, text: yTitle }} }}
           }}
         }}
-      }}
-    }});
+      }});
+    }}
+    makeChart('chart-demand', {demand_values}, '#e67e22', '{demand_type} [kW]');
+{extra_chart_calls}
   </script>
 </body>
 </html>"""
@@ -574,7 +587,10 @@ def make_generate_energy_demands_action():
                 "type": "tool",
                 "event": "started",
                 "name": "generate_energy_demands",
-                "label": (f"Compute {demand_type.lower()} — building #{bygningsnummer}, {year}"),
+                "label": (
+                    f"Compute {demand_type.lower()} + borehole temperatures"
+                    f" — building #{bygningsnummer}, {year}"
+                ),
                 "tool_call_id": tool_call_id,
                 "args": args,
                 "content": None,
@@ -613,7 +629,20 @@ def make_generate_energy_demands_action():
                 .to_dict(orient="records")
             )
 
-            html = _build_energy_demand_report_html(bygningsnummer, year, demand_type, records)
+            from pygfunction_sim import simulate_borehole_temperatures
+
+            df_borehole = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: simulate_borehole_temperatures(df_demand)
+            )
+            borehole_records = (
+                df_borehole[["time", "T_in", "T_out"]]
+                .assign(time=df_borehole["time"].astype(str))
+                .to_dict(orient="records")
+            )
+
+            html = _build_energy_demand_report_html(
+                bygningsnummer, year, demand_type, records, borehole_records
+            )
 
             safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in bygningsnummer)
             run_no = _energy_demand_run_count.get(session.session_id + safe_id, 0) + 1
@@ -644,7 +673,10 @@ def make_generate_energy_demands_action():
                     "event": "finished",
                     "name": "generate_energy_demands",
                     "tool_call_id": tool_call_id,
-                    "content": f"{len(records)} hours of {demand_type.lower()} data ready.",
+                    "content": (
+                        f"{len(records)} hours of {demand_type.lower()} data"
+                        " + borehole temperatures ready."
+                    ),
                 }
             )
             await send_wire(

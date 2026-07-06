@@ -47,6 +47,7 @@ dependencies = [
     "cdsapi>=0.7",
     "xarray>=2024.1",
     "netcdf4>=1.7",
+    "pygfunction>=2.2",
 ]
 
 [project.urls]
