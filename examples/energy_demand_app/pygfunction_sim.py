@@ -43,12 +43,120 @@ class FluidParams:
     m_flow_per_borehole: float = 0.3  # mass flow rate per borehole [kg/s]
 
 
+# Geothermal gradient default — Oslo granite, matches geothermal-viz OSLO_DEFAULTS
+_GEOTHERMAL_GRADIENT_DEFAULT = 0.025  # K/m
+
+
+def fetch_mean_surface_temperature(
+    lat: float,
+    lon: float,
+    start_year: int = 1991,
+    end_year: int = 2020,
+) -> float:
+    """Return the ERA5-Land climate normal for 2 m air temperature at a location.
+
+    Fetches daily mean temperatures from Open-Meteo's ERA5-Land archive and
+    averages them over the requested period.  Daily resolution keeps the
+    request compact — one value per day instead of 24.
+
+    Args:
+        lat: Latitude [degrees N].
+        lon: Longitude [degrees E].
+        start_year: First year of the averaging period (inclusive).
+        end_year: Last year of the averaging period (inclusive).
+
+    Returns:
+        Mean 2 m air temperature over the period [degrees C].
+    """
+    import requests
+
+    resp = requests.get(
+        "https://archive-api.open-meteo.com/v1/archive",
+        params={
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": f"{start_year}-01-01",
+            "end_date": f"{end_year}-12-31",
+            "daily": "temperature_2m_mean",
+            "timezone": "UTC",
+            "models": "era5_land",
+        },
+        timeout=180,
+    )
+    resp.raise_for_status()
+    daily_temps = resp.json()["daily"]["temperature_2m_mean"]
+    valid = [t for t in daily_temps if t is not None]
+    if not valid:
+        raise ValueError(
+            f"No temperature data returned for ({lat}, {lon}) between {start_year} and {end_year}."
+        )
+    return float(sum(valid) / len(valid))
+
+
+def compute_undisturbed_ground_temperature(
+    T_surface: float,
+    H: float,
+    D: float,
+    G: float = 0.025,
+    tilt: float = 0.0,
+) -> float:
+    """Compute the representative undisturbed ground temperature for a single borehole.
+
+    T_g = T_surface + G * (D + cos(tilt) * H / 2)
+
+    Args:
+        T_surface: Mean annual surface temperature [degrees C].
+        H: Active borehole depth [m].
+        D: Buried depth from surface to top of active section [m].
+        G: Geothermal gradient [K/m].
+        tilt: Borehole tilt angle from vertical [radians]. 0 for vertical.
+
+    Returns:
+        Undisturbed ground temperature [degrees C].
+    """
+    return T_surface + G * (D + np.cos(tilt) * H / 2.0)
+
+
+def compute_field_undisturbed_ground_temperature(
+    T_surface: float,
+    boreholes: list,
+    G: float = 0.025,
+) -> float:
+    """Compute the length-weighted mean undisturbed ground temperature for a borehole field.
+
+    T_g,field = sum_i(H_i * T_g,i) / sum_i(H_i)
+
+    where T_g,i = T_surface + G * (D_i + cos(tilt_i) * H_i / 2)
+
+    This is the formula from the PDF for fields with potentially varying borehole
+    depths, buried depths, or tilt angles. For a uniform field it collapses to the
+    single-borehole formula.
+
+    Args:
+        T_surface: Mean annual surface temperature [degrees C].
+        boreholes: List of pygfunction Borehole objects (each has .H, .D, .tilt).
+        G: Geothermal gradient [K/m].
+
+    Returns:
+        Length-weighted mean undisturbed ground temperature [degrees C].
+    """
+    total_H = sum(b.H for b in boreholes)
+    weighted = sum(
+        b.H * compute_undisturbed_ground_temperature(T_surface, b.H, b.D, G, b.tilt)
+        for b in boreholes
+    )
+    return weighted / total_H
+
+
 def simulate_borehole_temperatures(
     df_demand: pd.DataFrame,
+    lat: float | None = None,
+    lon: float | None = None,
     borehole: BoreholeFieldParams | None = None,
     pipe: PipeParams | None = None,
     fluid: FluidParams | None = None,
     COP: float = 3.5,
+    geothermal_gradient: float = 0.025,
 ) -> pd.DataFrame:
     """Compute hourly fluid temperatures in a borehole field from a building thermal demand.
 
@@ -58,10 +166,16 @@ def simulate_borehole_temperatures(
     obtain the borehole wall temperature T_b and carrier-fluid inlet and outlet
     temperatures T_in / T_out at each time step.
 
+    When lat and lon are provided, the undisturbed ground temperature T_g is
+    computed automatically from the ERA5-Land 1991-2020 climate normal and the
+    geothermal gradient.  Otherwise the value in BoreholeFieldParams.T_g is used.
+
     Args:
         df_demand:
             DataFrame with a 'time' column and one kW demand column (any name).
             The first non-'time' column is used as the demand series.
+        lat: Latitude of the site [degrees N]. Used to fetch T_surface from ERA5.
+        lon: Longitude of the site [degrees E].
         borehole:
             Borehole field geometry and ground thermal properties.
             Defaults to a single 200 m borehole in typical Norwegian ground.
@@ -70,10 +184,12 @@ def simulate_borehole_temperatures(
             Defaults to 40 mm OD HDPE pipes in standard grout.
         fluid:
             Carrier fluid, antifreeze concentration, and mass flow rate.
-            Defaults to 20 % mono-propylene glycol (MPG).
+            Defaults to pure water.
         COP:
             Heat-pump COP used to derive the ground extraction load.
             Q_borehole = Q_building * (COP - 1) / COP.
+        geothermal_gradient:
+            Geothermal gradient [K/m] used when computing T_g from lat/lon.
 
     Returns:
         DataFrame with columns:
@@ -119,7 +235,17 @@ def simulate_borehole_temperatures(
         borehole.r_b,
     )
     N_b = len(boreholes)
-    H_total = borehole.H * N_b  # total active borehole length [m]
+    H_total = sum(b.H for b in boreholes)
+
+    # -- undisturbed ground temperature --
+    # Computed after the field is built so we can use each borehole's actual H, D,
+    # and tilt in the length-weighted average (PDF formula for multi-borehole fields).
+    if lat is not None and lon is not None:
+        T_surface = fetch_mean_surface_temperature(lat, lon)
+        T_g = compute_field_undisturbed_ground_temperature(
+            T_surface, boreholes, geothermal_gradient
+        )
+        borehole = dataclasses.replace(borehole, T_g=T_g)
 
     # -- fluid properties --
     fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
