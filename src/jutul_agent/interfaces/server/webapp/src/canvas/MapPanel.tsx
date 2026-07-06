@@ -699,6 +699,13 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         setSimStatus(null);
         setSimSetup(null);
         setSimError(message || "Could not resolve simulation parameters.");
+      } else if (action === "energy_demand_ready") {
+        const { status, message } = payload as { status: string; message?: string };
+        if (status === "error") {
+          setEnergyStatus({ kind: "error", message: message || "Energy demand computation failed." });
+        } else {
+          setEnergyStatus(null);
+        }
       }
     }
   }, [uiActions]);
@@ -1017,12 +1024,16 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               disabled={energyStatus?.kind === "running"}
               onClick={() => {
                 if (!selectedBuilding) return;
-                setEnergyStatus({ kind: "running", message: "Fetching temperature data…" });
-                onAction("generate_temperature", {
+                setEnergyStatus({ kind: "running", message: "Computing energy demands…" });
+                onAction("generate_energy_demands", {
                   lat: selectedBuilding.lat,
                   lon: selectedBuilding.lon,
                   year: energyYear,
                   bygningsnummer: selectedBuilding.bygningsnummer,
+                  bygningstype_kode: selectedBuilding.bygningstype_kode ?? null,
+                  usable_floor_area_m2: energyFloorArea !== "" ? energyFloorArea : null,
+                  efficiency_key: energyEfficiencyKey,
+                  demand_type: energyDemandType,
                 });
               }}
             >

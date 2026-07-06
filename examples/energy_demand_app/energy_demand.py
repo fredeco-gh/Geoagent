@@ -142,9 +142,7 @@ def make_synthetic_space_heating_timeseries(
 
     Q_peak_space_kW = usable_floor_area_m2 * specific_peak_W_m2 / 1000.0
 
-    heating_fraction = (15 - df["temperature_C"]) / 35
-
-    heating_fraction = max(0, heating_fraction)
+    heating_fraction = ((15 - df["temperature_C"]) / 35).clip(lower=0)
 
     df["space_heating_kW"] = Q_peak_space_kW * heating_fraction
 
