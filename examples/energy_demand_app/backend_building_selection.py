@@ -540,7 +540,7 @@ def _build_energy_demand_report_html(
 </html>"""
 
 
-_energy_demand_report_count: dict[str, int] = {}
+_energy_demand_run_count: dict[str, int] = {}
 
 
 def make_generate_energy_demands_action():
@@ -615,10 +615,10 @@ def make_generate_energy_demands_action():
 
             html = _build_energy_demand_report_html(bygningsnummer, year, demand_type, records)
 
-            run_no = _energy_demand_report_count.get(session.session_id, 0) + 1
-            _energy_demand_report_count[session.session_id] = run_no
             safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in bygningsnummer)
-            rel = f"artifacts/energy-demand-{safe_id}-{year}-{run_no}.html"
+            run_no = _energy_demand_run_count.get(session.session_id + safe_id, 0) + 1
+            _energy_demand_run_count[session.session_id + safe_id] = run_no
+            rel = f"artifacts/energy-demand-{safe_id}-{run_no}.html"
             out = session.output_dir / rel
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(html, encoding="utf-8")
@@ -628,7 +628,7 @@ def make_generate_energy_demands_action():
                 "format": "html",
                 "caption": f"{demand_type} — building #{bygningsnummer}, {year}",
                 "kind": "report",
-                "slot": f"energy-demand-{safe_id}-{year}-{run_no}",
+                "slot": f"energy-demand-{safe_id}",
             }
             session.trace.append("artifact", artifact_payload)
             # _run_action's send_wire does not flush side outputs after "finished"

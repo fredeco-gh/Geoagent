@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -356,16 +355,7 @@ def run_profet_for_building(
         efficiency_key=efficiency_key,
     )
 
-    print("Payload preview:")
-    print(json.dumps(payload, indent=2)[:3000])
-
-    print("\nValidating PROFet payload...")
-    validation_result = validate_profet_payload(payload, token)
-
-    print("Validation result:")
-    print(validation_result)
-
-    print("\nRunning PROFet...")
+    validate_profet_payload(payload, token)
     result = run_profet(payload, token)
 
     return result
