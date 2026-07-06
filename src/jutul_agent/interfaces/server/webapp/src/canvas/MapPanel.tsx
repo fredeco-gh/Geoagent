@@ -100,6 +100,7 @@ const FIELD_LABELS: Record<string, string> = {
 interface SelectedBuilding {
   bygningsnummer: string;
   bygningstype?: string;
+  bygningstype_kode?: number;
   bygningsstatus?: string;
   kommunenummer?: string;
   kommunenavn?: string;
@@ -313,7 +314,30 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
 
   const [energyPanelOpen, setEnergyPanelOpen] = useState(false);
   const [energyYear, setEnergyYear] = useState(2023);
+  const [energyFloorArea, setEnergyFloorArea] = useState<number | "">("");
+  const [energyEfficiencyKey, setEnergyEfficiencyKey] = useState("Reg");
+  const [energyDemandType, setEnergyDemandType] = useState<
+    "DHW" | "Space heating" | "Total thermal heating"
+  >("Total thermal heating");
   const [energyStatus, setEnergyStatus] = useState<SimStatus | null>(null);
+
+  // Pre-fill the floor area input whenever the selected building changes.
+  useEffect(() => {
+    if (!selectedBuilding) return;
+    const code = selectedBuilding.bygningstype_kode;
+    if (code == null) {
+      setEnergyFloorArea("");
+      return;
+    }
+    const params = new URLSearchParams({ building_type_code: String(code) });
+    if (selectedBuilding.bruksareal_totalt != null) {
+      params.set("bruksareal_totalt", String(selectedBuilding.bruksareal_totalt));
+    }
+    fetch(`/api/building/default-floor-area?${params}`)
+      .then((r) => r.json())
+      .then((data) => setEnergyFloorArea(data.floor_area_m2 ?? ""))
+      .catch(() => setEnergyFloorArea(selectedBuilding.bruksareal_totalt ?? ""));
+  }, [selectedBuilding]);
 
   // A ref (not a plain function) so the mount effect below — which only runs
   // once per view.id — always calls the latest version, without needing to
@@ -918,7 +942,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         </div>
         <div className="sim-tab-content active">
           <div className="sim-param-row">
-            <label htmlFor="energy-year">Year of temperature data</label>
+            <label htmlFor="energy-year">Year</label>
             <div className="sim-param-input-wrap">
               <input
                 type="number"
@@ -933,6 +957,58 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                   if (!isNaN(v)) setEnergyYear(v);
                 }}
               />
+            </div>
+          </div>
+          <div className="sim-param-row">
+            <label htmlFor="energy-floor-area">Usable floor area (m²)</label>
+            <div className="sim-param-input-wrap">
+              <input
+                type="number"
+                id="energy-floor-area"
+                className="sim-param-input"
+                value={energyFloorArea}
+                min={1}
+                placeholder="Typical value if empty"
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setEnergyFloorArea(isNaN(v) || v <= 0 ? "" : v);
+                }}
+              />
+            </div>
+          </div>
+          <div className="sim-param-row">
+            <label htmlFor="energy-efficiency">Efficiency level</label>
+            <div className="sim-param-input-wrap">
+              <select
+                id="energy-efficiency"
+                className="sim-param-input"
+                value={energyEfficiencyKey}
+                onChange={(e) => setEnergyEfficiencyKey(e.target.value)}
+              >
+                <option value="Reg">Regular</option>
+                <option value="Eff-E">Efficient existing / retrofitted</option>
+                <option value="Eff-N">Efficient new build</option>
+                <option value="Vef">Very efficient / near-passive house</option>
+              </select>
+            </div>
+          </div>
+          <div className="sim-param-row">
+            <label htmlFor="energy-demand-type">Demand type</label>
+            <div className="sim-param-input-wrap">
+              <select
+                id="energy-demand-type"
+                className="sim-param-input"
+                value={energyDemandType}
+                onChange={(e) =>
+                  setEnergyDemandType(
+                    e.target.value as "DHW" | "Space heating" | "Total thermal heating"
+                  )
+                }
+              >
+                <option value="Total thermal heating">Total thermal heating</option>
+                <option value="Space heating">Space heating</option>
+                <option value="DHW">DHW (domestic hot water)</option>
+              </select>
             </div>
           </div>
           <div className="sim-actions">
@@ -950,7 +1026,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                 });
               }}
             >
-              ▶ Generate temperature data
+              ▶ Generate energy demands
             </button>
           </div>
           {energyStatus ? (

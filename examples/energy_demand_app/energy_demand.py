@@ -16,7 +16,7 @@ def get_energy_demand_timeseries(
     usable_floor_area_m2: float | None,
     efficiency_key: str = "Reg",
     demand_type: DemandType = "Total thermal heating",
-) -> list[float]:
+) -> pd.DataFrame:
     """Return an hourly energy demand time series for the given building and year.
 
     Tries to obtain the result from the PROFet API. Falls back to a synthetic
@@ -25,14 +25,14 @@ def get_energy_demand_timeseries(
     Args:
         df_temperature: DataFrame with columns 'time' and 'temperature_C'.
         selected_year: Calendar year to simulate.
-        building_category: PROFet building category (e.g. "House", "Office").
-        floor_area_m2: Heated floor area in square metres.
+        building_type_code: Matrikkel building type code.
+        usable_floor_area_m2: Heated floor area [m²], or None to use a typical value.
         efficiency_key: Energy efficiency level ("Reg", "Eff-E", "Eff-N", "Vef").
         demand_type: Which demand component to return — "DHW", "Space heating",
             or "Total thermal heating".
 
     Returns:
-        Hourly energy demand in kWh, one value per hour (8760 or 8784 values).
+        DataFrame with columns 'time' and the demand in kW, one row per hour.
     """
     try:
         result = run_profet_for_building(
@@ -47,8 +47,10 @@ def get_energy_demand_timeseries(
         print(f"[PROFet] API call failed ({exc}), falling back to synthetic demand.")
         return _make_synthetic_timeseries(
             df_temperature=df_temperature,
-            selected_year=selected_year,
             demand_type=demand_type,
+            building_type_code=building_type_code,
+            efficiency_key=efficiency_key,
+            usable_floor_area_m2=usable_floor_area_m2,
         )
 
 
@@ -230,13 +232,42 @@ def make_synthetic_dhw_timeseries(
 
 def _make_synthetic_timeseries(
     df_temperature: pd.DataFrame,
-    selected_year: int,
     demand_type: DemandType,
-) -> list[float]:
-    """Generate a synthetic hourly energy demand time series.
+    building_type_code: int,
+    efficiency_key: str,
+    usable_floor_area_m2: float | None,
+) -> pd.DataFrame:
+    """Synthetic hourly energy demand DataFrame; fallback when PROFet is unavailable."""
+    if demand_type == "DHW":
+        return make_synthetic_dhw_timeseries(
+            time=df_temperature["time"],
+            building_type_code=building_type_code,
+        )
 
-    Used as fallback when the PROFet API is unavailable.
+    if demand_type == "Space heating":
+        return make_synthetic_space_heating_timeseries(
+            df_temperature=df_temperature,
+            usable_floor_area_m2=usable_floor_area_m2,
+            building_type_code=building_type_code,
+            efficiency_key=efficiency_key,
+        )
 
-    TODO: implement synthetic generation based on temperature and demand_type.
-    """
-    raise NotImplementedError("Synthetic demand generation not yet implemented.")
+    if demand_type == "Total thermal heating":
+        df_dhw = make_synthetic_dhw_timeseries(
+            time=df_temperature["time"],
+            building_type_code=building_type_code,
+        )
+        df_sh = make_synthetic_space_heating_timeseries(
+            df_temperature=df_temperature,
+            usable_floor_area_m2=usable_floor_area_m2,
+            building_type_code=building_type_code,
+            efficiency_key=efficiency_key,
+        )
+        return pd.DataFrame(
+            {
+                "time": df_dhw["time"],
+                "total_heating_kW": df_dhw["dhw_kW"].values + df_sh["space_heating_kW"].values,
+            }
+        )
+
+    raise ValueError(f"Unknown demand_type: {demand_type!r}")

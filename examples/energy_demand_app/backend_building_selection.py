@@ -43,6 +43,7 @@ router = APIRouter()
 class BuildingInfo(BaseModel):
     bygningsnummer: str
     bygningstype: str | None = None
+    bygningstype_kode: int | None = None
     bygningsstatus: str | None = None
     kommunenummer: str | None = None
     kommunenavn: str | None = None
@@ -344,10 +345,15 @@ def normalize_building_candidates(
     for idx, row in gdf.sort_values("distance_m").iterrows():
         point = gdf_wgs84.loc[idx].geometry.centroid
         raw_type = _str(row, col_type)
+        try:
+            type_kode = int(raw_type) if raw_type is not None else None
+        except (ValueError, TypeError):
+            type_kode = None
         results.append(
             BuildingInfo(
                 bygningsnummer=str(row[col_nr]),
                 bygningstype=get_building_type_name(raw_type, type_map),
+                bygningstype_kode=type_kode,
                 bygningsstatus=_str(row, col_status),
                 kommunenummer=_str(row, col_kommnr),
                 kommunenavn=_str(row, col_kommnm),
@@ -439,6 +445,24 @@ def api_building_temperature(
 @router.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "source": "Matrikkelen Bygningspunkt WFS", "wfs": WFS_BASE_URL}
+
+
+@router.get("/api/building/default-floor-area")
+def api_default_floor_area(
+    building_type_code: int = Query(...),
+    bruksareal_totalt: float | None = Query(None),
+) -> dict:
+    """Return the usable floor area to use as the default for a building.
+
+    If bruksareal_totalt is provided it is returned as-is. Otherwise the
+    typical area for the building's PROFet category is returned.
+    """
+    from PROFet_API import usable_floor_area_m2_and_building_category
+
+    floor_area, building_category = usable_floor_area_m2_and_building_category(
+        bruksareal_totalt, building_type_code
+    )
+    return {"floor_area_m2": floor_area, "building_category": building_category}
 
 
 def _build_temperature_report_html(bygningsnummer: str, year: int, records: list[dict]) -> str:
