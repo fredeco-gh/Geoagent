@@ -1228,6 +1228,226 @@ def _make_run_borehole_simulation_tool(session: Session):
     return run_borehole_simulation
 
 
+def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
+    @tool
+    async def sweep_borehole_parameters(  # noqa: PLR0913
+        N_1: list[int] = [1],
+        N_2: list[int] = [1],
+        B: list[float] = [5.0],
+        H: list[float] = [200.0],
+        D: list[float] = [4.0],
+        r_b: list[float] = [0.070],
+        tilt: list[float] = [0.0],
+        orientation: list[float] = [0.0],
+        k_s: list[float] = [3.0],
+        alpha: list[float] = [1.33e-6],
+        r_in: list[float] = [0.015],
+        r_out: list[float] = [0.020],
+        D_s: list[float] = [0.040],
+        k_p: list[float] = [0.42],
+        k_g: list[float] = [1.0],
+        epsilon: list[float] = [1e-6],
+        COP: list[float] = [3.5],
+        G: list[float] = [0.025],
+        pattern: str = "rectangular",
+    ) -> str:
+        """Run pygfunction borehole simulations for every combination of the given
+        parameter lists and report summary temperatures (min/mean/max T_in and T_out)
+        for each combination.
+
+        Only call this when the user explicitly asks for a parameter sweep or wants
+        to compare multiple borehole configurations at once. For a single
+        configuration, use run_borehole_simulation instead.
+
+        Each parameter accepts a list of values; one simulation is run per element
+        of the Cartesian product of all lists. Parameters with a single-element list
+        are held fixed across all combinations. The total number of simulations equals
+        the product of all list lengths — keep individual lists short to limit runtime.
+
+        Args:
+            N_1: List of values for number of boreholes in x direction (rectangular)
+                or total number of boreholes (other patterns). Default [1].
+            N_2: List of values for number of boreholes in y direction (rectangular)
+                or number of polygon sides (polygonal). Default [1].
+            B: List of values for borehole spacing [m] or sunflower radius [m]. Default [5.0].
+            H: List of values for active borehole length [m]. Default [200.0].
+            D: List of values for buried depth [m]. Default [4.0].
+            r_b: List of values for borehole radius [m]. Default [0.070].
+            tilt: List of values for tilt angle from vertical [radians]. Default [0.0].
+            orientation: List of values for azimuthal direction of tilt [radians]. Default [0.0].
+            k_s: List of values for ground thermal conductivity [W/(m·K)]. Default [3.0].
+            alpha: List of values for ground thermal diffusivity [m²/s]. Default [1.33e-6].
+            r_in: List of values for pipe inner radius [m]. Default [0.015].
+            r_out: List of values for pipe outer radius [m]. Default [0.020].
+            D_s: List of values for shank spacing [m]. Default [0.040].
+            k_p: List of values for pipe wall thermal conductivity [W/(m·K)]. Default [0.42].
+            k_g: List of values for grout thermal conductivity [W/(m·K)]. Default [1.0].
+            epsilon: List of values for pipe roughness [m]. Default [1e-6].
+            COP: List of values for heat-pump COP. Default [3.5].
+            G: List of values for geothermal gradient [K/m]. Default [0.025].
+            pattern: Borehole field pattern shared across all combinations.
+                One of: "rectangular", "sunflower", "circular", "polygonal".
+        """
+        import itertools
+
+        import pandas as pd
+
+        from backend_building_selection import get_session_demand_data
+        from pygfunction_sim import (
+            GroundParams,
+            PipeParams,
+            circular_field,
+            polygonal_field,
+            rectangle_field,
+            simulate_borehole_temperatures,
+            sunflower_field,
+        )
+
+        demand = get_session_demand_data(session.session_id)
+        if demand is None:
+            return (
+                "No energy demand data is available for this session. "
+                "Ask the user to click 'Generate energy demands' for a building "
+                "on the map first."
+            )
+
+        if pattern not in ("rectangular", "sunflower", "circular", "polygonal"):
+            return (
+                f"Unknown pattern {pattern!r}. "
+                "Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
+            )
+
+        df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
+
+        param_names = [
+            "N_1", "N_2", "B", "H", "D", "r_b", "tilt", "orientation",
+            "k_s", "alpha", "r_in", "r_out", "D_s", "k_p", "k_g", "epsilon", "COP", "G",
+        ]
+        param_lists = [
+            N_1, N_2, B, H, D, r_b, tilt, orientation,
+            k_s, alpha, r_in, r_out, D_s, k_p, k_g, epsilon, COP, G,
+        ]
+
+        varied = [name for name, vals in zip(param_names, param_lists) if len(vals) > 1]
+        fixed = {
+            name: vals[0]
+            for name, vals in zip(param_names, param_lists)
+            if len(vals) == 1
+        }
+        combos = list(itertools.product(*param_lists))
+        n_combos = len(combos)
+
+        rows: list[dict] = []
+        for combo in combos:
+            (c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation,
+             c_k_s, c_alpha, c_r_in, c_r_out, c_D_s, c_k_p, c_k_g, c_epsilon,
+             c_COP, c_G) = combo
+            row: dict = dict(zip(param_names, combo))
+            try:
+                if pattern == "rectangular":
+                    boreholes = rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                elif pattern == "sunflower":
+                    boreholes = sunflower_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                elif pattern == "circular":
+                    boreholes = circular_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                elif pattern == "polygonal":
+                    boreholes = polygonal_field(c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                else: 
+                    raise ValueError(
+                        f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
+                        )
+                df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: simulate_borehole_temperatures(
+                        df,
+                        lat=demand.get("lat"),
+                        lon=demand.get("lon"),
+                        boreholes=boreholes,
+                        ground=GroundParams(k_s=c_k_s, alpha=c_alpha),
+                        pipe=PipeParams(
+                            r_in=c_r_in, r_out=c_r_out, D_s=c_D_s,
+                            k_p=c_k_p, k_g=c_k_g, epsilon=c_epsilon,
+                        ),
+                        COP=c_COP,
+                        G=c_G,
+                    ),
+                )
+                T_in = df_result["T_in"].tolist()
+                T_out = df_result["T_out"].tolist()
+                n = len(T_in)
+                row.update(
+                    n_boreholes=len(boreholes),
+                    T_in_min=min(T_in),
+                    T_in_mean=sum(T_in) / n,
+                    T_in_max=max(T_in),
+                    T_out_min=min(T_out),
+                    T_out_mean=sum(T_out) / n,
+                    T_out_max=max(T_out),
+                    error=None,
+                )
+            except Exception as exc:
+                row["error"] = str(exc)
+            rows.append(row)
+
+        # Build output text
+        lines: list[str] = [
+            f"Parameter sweep: {n_combos} combination(s), pattern={pattern!r}."
+        ]
+        if fixed:
+            fixed_str = "  ".join(
+                f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                for k, v in fixed.items()
+            )
+            lines.append(f"Fixed: {fixed_str}")
+        if varied:
+            lines.append(f"Varied: {', '.join(varied)}")
+        lines.append("")
+
+        # Table header — only varied params + n_boreholes + results
+        w = 9
+        header = (
+            f"  {'#':>3}"
+            + "".join(f"  {name:>{w}}" for name in varied)
+            + f"  {'n_bh':>5}"
+            + f"  {'Ti_min':>{w}}  {'Ti_mean':>{w}}  {'Ti_max':>{w}}"
+            + f"  {'To_min':>{w}}  {'To_mean':>{w}}  {'To_max':>{w}}"
+        )
+        lines.append(header)
+        lines.append("-" * len(header))
+
+        n_errors = 0
+        for i, row in enumerate(rows):
+            if row.get("error"):
+                n_errors += 1
+                varied_vals = "  ".join(
+                    f"{row[name]:>{w}.4g}" if isinstance(row[name], float) else f"{row[name]:>{w}}"
+                    for name in varied
+                )
+                lines.append(f"  {i+1:>3}  {varied_vals}  ERROR: {row['error']}")
+                continue
+            varied_vals = "".join(
+                f"  {row[name]:>{w}.4g}" if isinstance(row[name], float) else f"  {row[name]:>{w}}"
+                for name in varied
+            )
+            lines.append(
+                f"  {i+1:>3}"
+                + varied_vals
+                + f"  {row['n_boreholes']:>5}"
+                + f"  {row['T_in_min']:>{w}.2f}  {row['T_in_mean']:>{w}.2f}  {row['T_in_max']:>{w}.2f}"
+                + f"  {row['T_out_min']:>{w}.2f}  {row['T_out_mean']:>{w}.2f}  {row['T_out_max']:>{w}.2f}"
+            )
+
+        if n_errors:
+            lines.append(f"\n{n_errors} combination(s) failed (see ERROR lines above).")
+        lines.append(
+            "\nTo plot results for the best configuration, call run_borehole_simulation "
+            "with those parameter values."
+        )
+        return "\n".join(lines)
+
+    return sweep_borehole_parameters
+
+
 def _build_temperatures_html(timestamps: list[str], T_in: list[float], T_out: list[float]) -> str:
     import json
 
@@ -1373,14 +1593,22 @@ _PROMPT_FRAGMENT = (
     "sidebar also has a 'Setup Simulation' button that resolves and runs these "
     "directly (bypassing you) for a selected well — if they used it, you'll "
     "learn about the completed run the same way as any other UI event.\n\n"
-    "Call `run_borehole_simulation` to run a pygfunction g-function borehole "
-    "heat exchanger simulation on the heating demands most recently generated "
-    "via the 'Generate energy demands' button. You can vary the field pattern "
-    "(rectangular, sunflower, circular, polygonal), borehole depth, ground "
-    "thermal properties, pipe parameters, and heat-pump COP. After a successful "
-    "simulation, call `plot_borehole_temperatures` to open a T_in/T_out vs time "
-    "chart in its own canvas tab, or `plot_borehole_gfunction` to open a "
-    "g-function vs ln(t) chart — only when the user explicitly asks to see a plot."
+    "Call `run_borehole_simulation` to run a single pygfunction borehole heat "
+    "exchanger simulation on the heating demands most recently generated via the "
+    "'Generate energy demands' button. Use this for a single configuration. "
+    "After a successful simulation, call `plot_borehole_temperatures` to open a "
+    "T_in/T_out vs time chart in its own canvas tab, or `plot_borehole_gfunction` "
+    "to open a g-function vs ln(t) chart — only when the user explicitly asks to "
+    "see a plot.\n\n"
+    "Call `sweep_borehole_parameters` only when the user explicitly asks to "
+    "explore or optimise over multiple borehole configurations at once (e.g. "
+    "varying depth, number of boreholes, or ground properties). Each parameter "
+    "accepts a list of values; the tool runs one simulation per element of the "
+    "Cartesian product and returns min/mean/max T_in and T_out for every "
+    "combination. Keep individual lists short — the total number of simulations "
+    "is the product of all list lengths. After the sweep, call "
+    "`run_borehole_simulation` with the best combination if the user wants to "
+    "inspect or plot that configuration."
 )
 
 
@@ -1406,6 +1634,7 @@ def geothermal_map_capability(
             lambda session: _make_run_simulation_tool(session, simulation_jl_path),
             lambda session: _make_view_simulation_result_tool(session, simulation_jl_path),
             _make_run_borehole_simulation_tool,
+            _make_sweep_borehole_parameters_tool,
             _make_plot_borehole_temperatures_tool,
             _make_plot_borehole_gfunction_tool,
         ),
