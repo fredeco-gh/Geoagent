@@ -28,25 +28,6 @@ class GroundParams:
     k_s: float = 3.0  # thermal conductivity [W/(m K)] — Oslo gneiss/granite
     alpha: float = 1.33e-6  # thermal diffusivity [m²/s] — k_s / (rho*cp) = 3.0 / (2650*850)
 
-
-def rectangle_field(
-    N_1: int,
-    N_2: int,
-    B: float,
-    H: float = 200.0,
-    D: float = 4.0,
-    r_b: float = 0.070,
-    tilt: float = 0.0,
-    orientation: float = 0.0,
-) -> list[BoreholeParams]:
-    """Generate a rectangular N_1 × N_2 grid of boreholes with uniform spacing B."""
-    return [
-        BoreholeParams(H=H, D=D, r_b=r_b, x=i * B, y=j * B, tilt=tilt, orientation=orientation)
-        for i in range(N_1)
-        for j in range(N_2)
-    ]
-
-
 @dataclasses.dataclass
 class PipeParams:
     """Single U-tube pipe and grout parameters."""
@@ -67,6 +48,134 @@ class FluidParams:
     concentration: float = 0.0  # antifreeze concentration [%] — 0 for pure water
     m_flow_per_borehole: float = 0.3  # mass flow rate per borehole [kg/s]
 
+
+def rectangle_field(
+    N_1: int,
+    N_2: int,
+    B: float = 3.0,
+    H: float = 200.0,
+    D: float = 4.0,
+    r_b: float = 0.070,
+    tilt: float = 0.0,
+    orientation: float = 0.0,
+) -> list[BoreholeParams]:
+    """Generate a rectangular N_1 × N_2 grid of boreholes with uniform spacing B."""
+    return [
+        BoreholeParams(H=H, D=D, r_b=r_b, x=i * B, y=j * B, tilt=tilt, orientation=orientation)
+        for i in range(N_1)
+        for j in range(N_2)
+    ]
+
+def sunflower_field(
+    N: int,
+    r: float = 5.0,
+    H: float = 200.0,
+    D: float = 4.0,
+    r_b: float = 0.070,
+    tilt: float = 0.0,
+    orientation: float = 0.0,
+) -> list[BoreholeParams]:
+    """Generate a Fibonacci spiral pattern with N boreholes within radius r."""
+    phi = (1 + np.sqrt(5)) / 2  # golden ratio
+    delta_theta = 2 * np.pi / phi**2
+    return [
+        BoreholeParams(
+            H=H, D=D, r_b=r_b,
+            x=float(np.sqrt(i / N) * r * np.cos(i * delta_theta)),
+            y=float(np.sqrt(i / N) * r * np.sin(i * delta_theta)),
+            tilt=tilt, orientation=orientation,
+        )
+        for i in range(N)
+    ]
+
+
+def circular_field(
+    N: int,
+    B: float = 3.0,
+    H: float = 200.0,
+    D: float = 4.0,
+    r_b: float = 0.070,
+    tilt: float = 0.0,
+    orientation: float = 0.0,
+) -> list[BoreholeParams]:
+    """Generate N boreholes in concentric rings with spacing B.
+
+    Places one borehole at the centre, then fills rings outward until N
+    boreholes are placed. Each ring holds as many boreholes as its
+    circumference allows at spacing B.
+    """
+    points: list[tuple[float, float]] = [(0.0, 0.0)]
+    ring = 1
+    while len(points) < N:
+        r = ring * B
+        n_ring = min(max(1, round(2 * np.pi * r / B)), N - len(points))
+        for k in range(n_ring):
+            theta = 2 * np.pi * k / n_ring
+            points.append((r * np.cos(theta), r * np.sin(theta)))
+        ring += 1
+    return [
+        BoreholeParams(H=H, D=D, r_b=r_b, x=x, y=y, tilt=tilt, orientation=orientation)
+        for x, y in points
+    ]
+
+
+def _points_in_polygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+    """Boolean mask: True where each column of points lies inside polygon (even-odd rule).
+
+    points: (2, N) array of candidate coordinates.
+    polygon: (2, M) array of vertex coordinates (closed implicitly).
+    """
+    n_pts = points.shape[1]
+    n_vert = polygon.shape[1]
+    result = np.zeros(n_pts, dtype=bool)
+    for p in range(n_pts):
+        x, y = points[0, p], points[1, p]
+        inside = False
+        j = n_vert - 1
+        for i in range(n_vert):
+            xi, yi = polygon[0, i], polygon[1, i]
+            xj, yj = polygon[0, j], polygon[1, j]
+            if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+                inside = not inside
+            j = i
+        result[p] = inside
+    return result
+
+
+def polygonal_field(
+    N: int,
+    B: float = 3.0,
+    num_sides: int = 6,
+    H: float = 200.0,
+    D: float = 4.0,
+    r_b: float = 0.070,
+    tilt: float = 0.0,
+    orientation: float = 0.0,
+) -> list[BoreholeParams]:
+    """Generate N boreholes inside a regular polygon with num_sides sides.
+
+    Sizes the polygon to enclose approximately N boreholes at spacing B, fills
+    it with a rectangular grid, keeps only interior points, then returns the N
+    closest to the centroid.
+    """
+    R = np.sqrt(2 * N * B**2 / (num_sides * np.sin(2 * np.pi / num_sides)))
+    theta = np.linspace(0, 2 * np.pi, num_sides + 1)[:-1]
+    polygon = np.vstack([R * np.cos(theta), R * np.sin(theta)])  # (2, num_sides)
+
+    margin = 1.2
+    nxy = 2 * int(np.ceil(margin * R / B)) + 1
+    xs = (np.arange(nxy) - (nxy - 1) / 2) * B
+    xx, yy = np.meshgrid(xs, xs)
+    xy = np.vstack([xx.ravel(), yy.ravel()])  # (2, nxy²)
+
+    xy = xy[:, _points_in_polygon(xy, polygon)]
+    order = np.argsort(np.hypot(xy[0], xy[1]))[:N]
+    xy = xy[:, order]
+
+    return [
+        BoreholeParams(H=H, D=D, r_b=r_b, x=float(xy[0, i]), y=float(xy[1, i]), tilt=tilt, orientation=orientation)
+        for i in range(xy.shape[1])
+    ]
 
 @functools.lru_cache(maxsize=256)
 def fetch_mean_surface_temperature(

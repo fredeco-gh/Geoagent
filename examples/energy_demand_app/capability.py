@@ -1109,6 +1109,7 @@ def _make_run_borehole_simulation_tool(session: Session):
         epsilon: float = 1e-6,
         COP: float = 3.5,
         G: float = 0.025,
+        pattern: str = "rectangular",
     ) -> str:
         """Run a pygfunction borehole heat exchanger simulation using the heating
         demands most recently generated for the current building.
@@ -1119,9 +1120,13 @@ def _make_run_borehole_simulation_tool(session: Session):
         climate normals at the building's coordinates.
 
         Args:
-            N_1: Number of boreholes in the x direction. Default 1.
-            N_2: Number of boreholes in the y direction. Default 1.
-            B: Borehole spacing [m]. Default 5.
+            N_1: Number of boreholes in the x direction for pattern = "rectangular"; 
+            else, it is the total number of boreholes. Default 1.
+            N_2: Number of boreholes in the y direction for pattern = "rectangular". 
+            If pattern = "polygonal", then it is the number of sides in the regular polygon. 
+            Else, it does not do anything. Default 1.
+            B: radius of sunflower pattern if pattern = "sunflower"; else, it is the borehole spacing [m]. 
+            Default 5.
             H: Active borehole length [m]. Default 200.
             D: Buried depth from surface to top of active section [m]. Default 4.
             r_b: Borehole radius [m]. Default 0.070 (140 mm diameter).
@@ -1137,6 +1142,8 @@ def _make_run_borehole_simulation_tool(session: Session):
             epsilon: Pipe inner-wall roughness [m]. Default 1e-6.
             COP: Heat-pump coefficient of performance. Default 3.5.
             G: Geothermal gradient [K/m]. Default 0.025.
+            pattern: the pattern type for the borehole field. 
+            Possible values: "sunflower", "rectangular", "circular", "polygonal". 
         """
         import pandas as pd
 
@@ -1145,6 +1152,9 @@ def _make_run_borehole_simulation_tool(session: Session):
             GroundParams,
             PipeParams,
             rectangle_field,
+            sunflower_field,
+            circular_field, 
+            polygonal_field,
             simulate_borehole_temperatures,
         )
 
@@ -1158,13 +1168,26 @@ def _make_run_borehole_simulation_tool(session: Session):
 
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
         try:
+            if pattern == "rectangular": 
+                boreholes = rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation)
+            elif pattern == "sunflower": 
+                boreholes = sunflower_field(N_1,B,H,D,r_b,tilt,orientation)
+            elif pattern == "circular": 
+                boreholes = circular_field(N_1, B, H, D, r_b, tilt, orientation)
+            elif pattern == "polygonal": 
+                boreholes = polygonal_field(N_1,B,N_2,H,D,r_b,tilt,orientation)
+            else: 
+                raise ValueError(
+                    f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
+                    )
+            
             df_result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: simulate_borehole_temperatures(
                     df,
                     lat=demand.get("lat"),
                     lon=demand.get("lon"),
-                    boreholes=rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation),
+                    boreholes=boreholes,
                     ground=GroundParams(k_s=k_s, alpha=alpha),
                     pipe=PipeParams(r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p, k_g=k_g, epsilon=epsilon),
                     COP=COP,
