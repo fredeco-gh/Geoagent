@@ -714,7 +714,7 @@ def make_generate_energy_demands_action():
 
             from pygfunction_sim import simulate_borehole_temperatures
 
-            df_borehole = await asyncio.get_event_loop().run_in_executor(
+            df_borehole, *_ = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: simulate_borehole_temperatures(
                     df_demand[["time", demand_col]].rename(columns={demand_col: "kW"}),

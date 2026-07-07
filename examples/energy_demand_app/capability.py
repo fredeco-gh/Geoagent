@@ -84,6 +84,10 @@ _map_pinned: set[str] = set()
 # opens an additional tab instead of overwriting the previous run's.
 _simulation_run_count: dict[str, int] = {}
 
+# Last successful borehole simulation result per session — consumed by the
+# plot tools without re-running the simulation.
+_session_borehole_results: dict[str, dict] = {}
+
 
 def _load_well_features(data_path: str) -> list[dict[str, Any]]:
     cached = _wells_cache.get(data_path)
@@ -1181,7 +1185,7 @@ def _make_run_borehole_simulation_tool(session: Session):
                     f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
                     )
             
-            df_result = await asyncio.get_event_loop().run_in_executor(
+            df_result, gfunc_time, gfunc_vals = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: simulate_borehole_temperatures(
                     df,
@@ -1199,17 +1203,156 @@ def _make_run_borehole_simulation_tool(session: Session):
 
         T_in = df_result["T_in"].tolist()
         T_out = df_result["T_out"].tolist()
+        timestamps = df_result["time"].astype(str).tolist()
         n = len(T_in)
+
+        _session_borehole_results[session.session_id] = {
+            "timestamps": timestamps,
+            "T_in": T_in,
+            "T_out": T_out,
+            "gfunc_time": gfunc_time.tolist(),
+            "gfunc_vals": gfunc_vals.tolist(),
+        }
+
         return (
             f"Borehole simulation completed: {n} hourly timesteps, "
-            f"{N_1 * N_2} borehole(s), depth {H} m.\n"
+            f"{len(boreholes)} borehole(s), depth {H} m.\n"
             f"T_in:  min {min(T_in):.1f} °C  max {max(T_in):.1f} °C  "
             f"mean {sum(T_in)/n:.1f} °C\n"
             f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
-            f"mean {sum(T_out)/n:.1f} °C"
+            f"mean {sum(T_out)/n:.1f} °C\n"
+            "Use plot_borehole_temperatures or plot_borehole_gfunction if the "
+            "user wants to visualise the results."
         )
 
     return run_borehole_simulation
+
+
+def _build_temperatures_html(timestamps: list[str], T_in: list[float], T_out: list[float]) -> str:
+    import json
+
+    stride = max(1, len(timestamps) // 365)
+    data = json.dumps({
+        "labels": timestamps[::stride],
+        "T_in": T_in[::stride],
+        "T_out": T_out[::stride],
+    })
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Borehole fluid temperatures</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>body{{font-family:sans-serif;margin:24px;background:#f5f5f5}}
+.chart-wrap{{background:#fff;border-radius:8px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:24px}}</style>
+</head><body>
+<h1 style="font-size:1.1rem;color:#333;margin-bottom:16px">Borehole fluid temperatures</h1>
+<div class="chart-wrap"><canvas id="c"></canvas></div>
+<script>
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fmtDate(s){{const d=new Date(s);return isNaN(d)?s:String(d.getDate()).padStart(2,'0')+' '+MONTHS[d.getMonth()];}}
+const d={data};
+new Chart(document.getElementById('c'),{{
+  type:'line',
+  data:{{labels:d.labels,datasets:[
+    {{label:'T_in (°C)',data:d.T_in,borderColor:'#2980b9',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
+    {{label:'T_out (°C)',data:d.T_out,borderColor:'#27ae60',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
+  ]}},
+  options:{{responsive:true,animation:false,plugins:{{legend:{{position:'top'}}}},
+    scales:{{
+      x:{{title:{{display:true,text:'Date'}},ticks:{{maxTicksLimit:12,maxRotation:0,callback(v){{return fmtDate(this.getLabelForValue(v));}}}}  }},
+      y:{{title:{{display:true,text:'Temperature (°C)'}}}}
+    }}}}
+}});
+</script></body></html>"""
+
+
+def _build_gfunction_html(time_s: list[float], gfunc: list[float]) -> str:
+    import json, math
+
+    data = json.dumps({
+        "labels": [f"{math.log(t):.2f}" for t in time_s],
+        "g": [round(v, 4) for v in gfunc],
+    })
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>g-function</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>body{{font-family:sans-serif;padding:16px}}canvas{{max-height:420px}}</style>
+</head><body>
+<h2>g-function</h2>
+<canvas id="c"></canvas>
+<script>
+const d={data};
+new Chart(document.getElementById('c'),{{
+  type:'line',
+  data:{{labels:d.labels,datasets:[
+    {{label:'g(ln t)',data:d.g,borderColor:'#2ecc71',pointRadius:3,tension:0}},
+  ]}},
+  options:{{animation:false,plugins:{{legend:{{position:'top'}}}},
+    scales:{{x:{{title:{{display:true,text:'ln(t [s])'}}}},y:{{title:{{display:true,text:'g'}}}}}}}}
+}});
+</script></body></html>"""
+
+
+def _make_plot_borehole_temperatures_tool(session: Session):
+    @tool
+    async def plot_borehole_temperatures() -> str:
+        """Plot T_in and T_out vs time from the most recent borehole simulation.
+
+        Opens a chart in a dedicated canvas tab. Call run_borehole_simulation first.
+        """
+        result = _session_borehole_results.get(session.session_id)
+        if result is None:
+            return "No borehole simulation results available. Run run_borehole_simulation first."
+
+        html = _build_temperatures_html(result["timestamps"], result["T_in"], result["T_out"])
+        rel = "artifacts/borehole-temperatures.html"
+        out = session.output_dir / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html, encoding="utf-8")
+        session.trace.append(
+            "artifact",
+            {
+                "path": rel,
+                "mime": "text/html",
+                "format": "html",
+                "caption": "Borehole fluid temperatures",
+                "kind": "report",
+                "slot": "borehole-temperatures",
+            },
+        )
+        return "Temperature plot opened in canvas."
+
+    return plot_borehole_temperatures
+
+
+def _make_plot_borehole_gfunction_tool(session: Session):
+    @tool
+    async def plot_borehole_gfunction() -> str:
+        """Plot the g-function vs ln(t) for the borehole field from the most recent simulation.
+
+        Opens a chart in a dedicated canvas tab. Call run_borehole_simulation first.
+        """
+        result = _session_borehole_results.get(session.session_id)
+        if result is None:
+            return "No borehole simulation results available. Run run_borehole_simulation first."
+
+        html = _build_gfunction_html(result["gfunc_time"], result["gfunc_vals"])
+        rel = "artifacts/borehole-gfunction.html"
+        out = session.output_dir / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html, encoding="utf-8")
+        session.trace.append(
+            "artifact",
+            {
+                "path": rel,
+                "mime": "text/html",
+                "format": "html",
+                "caption": "Borehole g-function",
+                "kind": "report",
+                "slot": "borehole-gfunction",
+            },
+        )
+        return "G-function plot opened in canvas."
+
+    return plot_borehole_gfunction
 
 
 _PROMPT_FRAGMENT = (
@@ -1232,11 +1375,12 @@ _PROMPT_FRAGMENT = (
     "learn about the completed run the same way as any other UI event.\n\n"
     "Call `run_borehole_simulation` to run a pygfunction g-function borehole "
     "heat exchanger simulation on the heating demands most recently generated "
-    "via the 'Generate energy demands' button. It returns hourly T_in/T_out "
-    "fluid temperatures and a 4-panel CairoMakie plot. You can vary borehole "
-    "depth, field geometry, ground thermal properties, and heat-pump COP — "
-    "the default parameters are reasonable starting points for Norwegian ground "
-    "conditions (Oslo gneiss, 200 m depth, single borehole)."
+    "via the 'Generate energy demands' button. You can vary the field pattern "
+    "(rectangular, sunflower, circular, polygonal), borehole depth, ground "
+    "thermal properties, pipe parameters, and heat-pump COP. After a successful "
+    "simulation, call `plot_borehole_temperatures` to open a T_in/T_out vs time "
+    "chart in its own canvas tab, or `plot_borehole_gfunction` to open a "
+    "g-function vs ln(t) chart — only when the user explicitly asks to see a plot."
 )
 
 
@@ -1262,6 +1406,8 @@ def geothermal_map_capability(
             lambda session: _make_run_simulation_tool(session, simulation_jl_path),
             lambda session: _make_view_simulation_result_tool(session, simulation_jl_path),
             _make_run_borehole_simulation_tool,
+            _make_plot_borehole_temperatures_tool,
+            _make_plot_borehole_gfunction_tool,
         ),
         prompt_fragment=_PROMPT_FRAGMENT,
         surfaces=("web",),

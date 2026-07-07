@@ -177,6 +177,7 @@ def polygonal_field(
         for i in range(xy.shape[1])
     ]
 
+
 @functools.lru_cache(maxsize=256)
 def fetch_mean_surface_temperature(
     lat: float,
@@ -289,7 +290,7 @@ def simulate_borehole_temperatures(
     ground: GroundParams | None = None,
     COP: float = 3.5,
     G: float = 0.025,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Compute hourly fluid temperatures in a borehole field from a building thermal demand.
 
     Converts building heating demand to a ground extraction load via
@@ -429,7 +430,7 @@ def simulate_borehole_temperatures(
         T_in_arr[i] = pipe_obj.get_inlet_temperature(Q_i, T_b, m_flow, cp_f)
         T_out_arr[i] = pipe_obj.get_outlet_temperature(T_in_arr[i], T_b, m_flow, cp_f)
 
-    return pd.DataFrame(
+    df_out = pd.DataFrame(
         {
             "time": df["time"].values,
             "Q_building_kW": Q_building_W / 1_000.0,
@@ -438,3 +439,4 @@ def simulate_borehole_temperatures(
             "T_out": T_out_arr,
         }
     )
+    return df_out, time_req, gFunc.gFunc
