@@ -712,27 +712,6 @@ def make_generate_energy_demands_action():
                 .to_dict(orient="records")
             )
 
-            from pygfunction_sim import simulate_borehole_temperatures
-
-            df_borehole, *_ = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: simulate_borehole_temperatures(
-                    df_demand[["time", demand_col]].rename(columns={demand_col: "kW"}),
-                    lat=lat,
-                    lon=lon,
-                ),
-            )
-
-            borehole_records = [
-                {"time": str(ts), "T_in": float(tin), "T_out": float(tout)}
-                for ts, tin, tout in zip(
-                    df_borehole["time"],
-                    df_borehole["T_in"],
-                    df_borehole["T_out"],
-                    strict=False,
-                )
-            ]
-
             # Persist demand data for the agent's run_borehole_simulation tool.
             _session_demand_data[session.session_id] = {
                 "timestamps": [str(ts) for ts in df_demand["time"]],
@@ -742,7 +721,7 @@ def make_generate_energy_demands_action():
             }
 
             html = _build_energy_demand_report_html(
-                bygningsnummer, year, demand_type, records, borehole_records
+                bygningsnummer, year, demand_type, records
             )
 
             safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in bygningsnummer)

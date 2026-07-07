@@ -88,6 +88,10 @@ _simulation_run_count: dict[str, int] = {}
 # plot tools without re-running the simulation.
 _session_borehole_results: dict[str, dict] = {}
 
+# Per-session count of borehole simulation runs; each run gets its own slot so
+# plot tabs accumulate instead of overwriting each other.
+_borehole_sim_run_count: dict[str, int] = {}
+
 
 def _load_well_features(data_path: str) -> list[dict[str, Any]]:
     cached = _wells_cache.get(data_path)
@@ -1206,7 +1210,10 @@ def _make_run_borehole_simulation_tool(session: Session):
         timestamps = df_result["time"].astype(str).tolist()
         n = len(T_in)
 
+        run_no = _borehole_sim_run_count.get(session.session_id, 0) + 1
+        _borehole_sim_run_count[session.session_id] = run_no
         _session_borehole_results[session.session_id] = {
+            "run_no": run_no,
             "timestamps": timestamps,
             "T_in": T_in,
             "T_out": T_out,
@@ -1522,8 +1529,9 @@ def _make_plot_borehole_temperatures_tool(session: Session):
         if result is None:
             return "No borehole simulation results available. Run run_borehole_simulation first."
 
+        run_no = result["run_no"]
         html = _build_temperatures_html(result["timestamps"], result["T_in"], result["T_out"])
-        rel = "artifacts/borehole-temperatures.html"
+        rel = f"artifacts/borehole-temperatures-{run_no}.html"
         out = session.output_dir / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(html, encoding="utf-8")
@@ -1533,9 +1541,9 @@ def _make_plot_borehole_temperatures_tool(session: Session):
                 "path": rel,
                 "mime": "text/html",
                 "format": "html",
-                "caption": "Borehole fluid temperatures",
+                "caption": f"Borehole temperatures #{run_no}",
                 "kind": "report",
-                "slot": "borehole-temperatures",
+                "slot": f"borehole-temperatures-{run_no}",
             },
         )
         return "Temperature plot opened in canvas."
@@ -1554,8 +1562,9 @@ def _make_plot_borehole_gfunction_tool(session: Session):
         if result is None:
             return "No borehole simulation results available. Run run_borehole_simulation first."
 
+        run_no = result["run_no"]
         html = _build_gfunction_html(result["gfunc_time"], result["gfunc_vals"])
-        rel = "artifacts/borehole-gfunction.html"
+        rel = f"artifacts/borehole-gfunction-{run_no}.html"
         out = session.output_dir / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(html, encoding="utf-8")
@@ -1565,9 +1574,9 @@ def _make_plot_borehole_gfunction_tool(session: Session):
                 "path": rel,
                 "mime": "text/html",
                 "format": "html",
-                "caption": "Borehole g-function",
+                "caption": f"Borehole g-function #{run_no}",
                 "kind": "report",
-                "slot": "borehole-gfunction",
+                "slot": f"borehole-gfunction-{run_no}",
             },
         )
         return "G-function plot opened in canvas."
