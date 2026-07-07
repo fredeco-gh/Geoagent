@@ -280,19 +280,45 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
   // for) every selection change.
   const selectedRef = useRef<SelectedWell | null>(null);
   selectedRef.current = selected;
-  const [total, setTotal] = useState(0);
-  const [byGroup, setByGroup] = useState<Record<string, number>>({});
   const [visibility, setVisibility] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(LAYER_GROUPS.map((g) => [g.id, true])),
   );
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [simPanelWidth, setSimPanelWidth] = useState(380);
+  const [energyPanelWidth, setEnergyPanelWidth] = useState(380);
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const panelLeft = panelRef.current?.getBoundingClientRect().left ?? 0;
     const onMove = (ev: MouseEvent) => {
       setSidebarWidth(Math.max(220, Math.min(600, ev.clientX - panelLeft)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
+  const handleSimPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      setSimPanelWidth(Math.max(280, Math.min(700, window.innerWidth - ev.clientX)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
+  const handleEnergyPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      setEnergyPanelWidth(Math.max(280, Math.min(700, window.innerWidth - ev.clientX)));
     };
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);
@@ -492,9 +518,6 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               if (feature) selectWellRef.current(feature as unknown as GeoJsonFeature, e.lngLat);
             });
           }
-
-          setTotal(geojson.features.length);
-          setByGroup(Object.fromEntries(Object.entries(groups).map(([id, g]) => [id, g.features.length])));
 
           // Terrain/3D buildings are visual polish on free, keyless public
           // tile sources — best-effort, since the map is fully usable without
@@ -749,10 +772,6 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     }
   };
 
-  const visibleCount = LAYER_GROUPS.reduce(
-    (sum, g) => sum + (visibility[g.id] ? byGroup[g.id] ?? 0 : 0),
-    0,
-  );
 
   return (
     <div ref={panelRef} className={`map-panel${active ? " active" : ""}`}>
@@ -763,7 +782,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
       >
         <div className="sidebar-header">
           <h1>Geothermal map</h1>
-          <p className="subtitle">Norwegian boreholes</p>
+          <p className="subtitle">Norwegian boreholes and buildings</p>
         </div>
         <div className="sidebar-section">
           <h2>Layers</h2>
@@ -778,17 +797,6 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               {g.label}
             </label>
           ))}
-        </div>
-        <div className="sidebar-section">
-          <h2>Statistics</h2>
-          <div className="stat-item">
-            <span className="stat-label">Total boreholes:</span>
-            <span className="stat-value">{total.toLocaleString()}</span>
-          </div>
-          <div className="stat-item">
-            <span className="stat-label">Visible:</span>
-            <span className="stat-value">{visibleCount.toLocaleString()}</span>
-          </div>
         </div>
         <div className="sidebar-section">
           {selected ? (
@@ -827,7 +835,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                 <div className="well-title">Building {escapeHtml(selectedBuilding.bygningsnummer)}</div>
                 <div className="sim-setup-action">
                   <button className="btn-primary" onClick={() => setEnergyPanelOpen(true)}>
-                    ⚡ Analyze energy needs
+                    ⚡ Analyze heating needs
                   </button>
                 </div>
                 <table>
@@ -871,7 +879,14 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
       >
         ☰
       </button>
-      <div className={`sim-panel${simPanelOpen ? " open" : ""}`}>
+      {simPanelOpen && (
+        <div
+          className="sim-panel-resize-handle"
+          style={{ right: simPanelWidth - 3 }}
+          onMouseDown={handleSimPanelResize}
+        />
+      )}
+      <div className={`sim-panel${simPanelOpen ? " open" : ""}`} style={{ width: simPanelWidth }}>
         <div className="sim-panel-header">
           <h2>{simSetup ? `Simulation — ${simSetup.well_id}` : "Simulation Setup"}</h2>
           <button className="btn-icon" title="Close" onClick={handleCloseSimPanel}>
@@ -940,9 +955,16 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           )}
         </div>
       </div>
-      <div className={`sim-panel${energyPanelOpen ? " open" : ""}`}>
+      {energyPanelOpen && (
+        <div
+          className="sim-panel-resize-handle"
+          style={{ right: energyPanelWidth - 3 }}
+          onMouseDown={handleEnergyPanelResize}
+        />
+      )}
+      <div className={`sim-panel${energyPanelOpen ? " open" : ""}`} style={{ width: energyPanelWidth }}>
         <div className="sim-panel-header">
-          <h2>Energy needs — building #{selectedBuilding?.bygningsnummer ?? "?"}</h2>
+          <h2>Heating needs — building #{selectedBuilding?.bygningsnummer ?? "?"}</h2>
           <button className="btn-icon" title="Close" onClick={() => setEnergyPanelOpen(false)}>
             ✕
           </button>
@@ -1024,7 +1046,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               disabled={energyStatus?.kind === "running"}
               onClick={() => {
                 if (!selectedBuilding) return;
-                setEnergyStatus({ kind: "running", message: "Computing energy demands…" });
+                setEnergyStatus({ kind: "running", message: "Computing heating needs…" });
                 onAction("generate_energy_demands", {
                   lat: selectedBuilding.lat,
                   lon: selectedBuilding.lon,
@@ -1037,7 +1059,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                 });
               }}
             >
-              ▶ Generate energy demands
+              ▶ Generate heating needs
             </button>
           </div>
           {energyStatus ? (

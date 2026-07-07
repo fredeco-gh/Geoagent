@@ -203,6 +203,20 @@
 
 /* ── Right simulation panel ──────────────────────────────────────────────── */
 
+.map-panel .sim-panel-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 20;
+}
+
+.map-panel .sim-panel-resize-handle:hover,
+.map-panel .sim-panel-resize-handle:active {
+  background: rgba(39, 174, 96, 0.35);
+}
+
 .map-panel .sim-panel {
   position: absolute;
   top: 0;
