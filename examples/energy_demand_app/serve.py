@@ -74,7 +74,7 @@ async def _host_factory(
         resume=resume,
         session_id=session_id,
         extensions=[
-            geothermal_map_capability(str(DATA_PATH), str(SIMULATION_JL)),
+            geothermal_map_capability(str(DATA_PATH), str(SIMULATION_JL), str(PYGSIM_JL)),
             *extensions,
         ],
     )

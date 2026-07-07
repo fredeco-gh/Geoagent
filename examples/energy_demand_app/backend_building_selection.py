@@ -556,6 +556,16 @@ def _build_energy_demand_report_html(
 
 _energy_demand_run_count: dict[str, int] = {}
 
+# Most-recent energy demand data per session, written by generate_energy_demands
+# so the agent's run_borehole_simulation tool can pick it up without the user
+# having to re-enter the same demand series.
+_session_demand_data: dict[str, dict] = {}
+
+
+def get_session_demand_data(session_id: str) -> dict | None:
+    """Return the most-recent energy demand data for a session, or None."""
+    return _session_demand_data.get(session_id)
+
 # Warmup template: pre-compiles PythonCall and loads pygfunction_sim.jl into
 # the Julia kernel during session startup so the first agent call is fast.
 _PYGSIM_WARMUP_TEMPLATE = """
@@ -722,6 +732,14 @@ def make_generate_energy_demands_action():
                     strict=False,
                 )
             ]
+
+            # Persist demand data for the agent's run_borehole_simulation tool.
+            _session_demand_data[session.session_id] = {
+                "timestamps": [str(ts) for ts in df_demand["time"]],
+                "demand_kw": df_demand[demand_col].tolist(),
+                "lat": lat,
+                "lon": lon,
+            }
 
             html = _build_energy_demand_report_html(
                 bygningsnummer, year, demand_type, records, borehole_records

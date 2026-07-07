@@ -1088,6 +1088,87 @@ def make_setup_simulation_action(simulation_jl_path: str):
     return setup_simulation_action
 
 
+def _make_run_borehole_simulation_tool(session: Session):
+    @tool
+    async def run_borehole_simulation(  # noqa: PLR0913
+        H: float = 200.0,
+        D: float = 4.0,
+        r_b: float = 0.070,
+        N_1: int = 1,
+        N_2: int = 1,
+        B: float = 5.0,
+        k_s: float = 3.0,
+        alpha: float = 1.33e-6,
+        COP: float = 3.5,
+        G: float = 0.025,
+    ) -> str:
+        """Run a pygfunction borehole heat exchanger simulation using the heating
+        demands most recently generated for the current building.
+
+        Uses the demand series from the last 'Generate energy demands' button click.
+        Computes hourly carrier-fluid temperatures (T_in, T_out) for a U-tube
+        borehole field. Ground temperature is derived from ERA5-Land 1991-2020
+        climate normals at the building's coordinates.
+
+        Args:
+            H: Active borehole depth [m]. Default 200.
+            D: Buried depth from surface to top of active section [m]. Default 4.
+            r_b: Borehole radius [m]. Default 0.070 (140 mm diameter).
+            N_1: Number of boreholes in the x direction. Default 1.
+            N_2: Number of boreholes in the y direction. Default 1.
+            B: Borehole spacing [m]. Default 5.
+            k_s: Ground thermal conductivity [W/(m·K)]. Default 3.0.
+            alpha: Ground thermal diffusivity [m²/s]. Default 1.33e-6.
+            COP: Heat-pump coefficient of performance. Default 3.5.
+            G: Geothermal gradient [K/m]. Default 0.025.
+        """
+        import pandas as pd
+
+        from backend_building_selection import get_session_demand_data
+        from pygfunction_sim import BoreholeFieldParams, simulate_borehole_temperatures
+
+        demand = get_session_demand_data(session.session_id)
+        if demand is None:
+            return (
+                "No energy demand data is available for this session. "
+                "Ask the user to click 'Generate energy demands' for a building "
+                "on the map first."
+            )
+
+        df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
+        borehole_params = BoreholeFieldParams(
+            H=H, D=D, r_b=r_b, N_1=N_1, N_2=N_2, B=B, k_s=k_s, alpha=alpha
+        )
+        try:
+            df_result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: simulate_borehole_temperatures(
+                    df,
+                    lat=demand.get("lat"),
+                    lon=demand.get("lon"),
+                    borehole=borehole_params,
+                    COP=COP,
+                    G=G,
+                ),
+            )
+        except Exception as exc:
+            return f"ERROR: Borehole simulation failed: {exc}"
+
+        T_in = df_result["T_in"].tolist()
+        T_out = df_result["T_out"].tolist()
+        n = len(T_in)
+        return (
+            f"Borehole simulation completed: {n} hourly timesteps, "
+            f"{N_1 * N_2} borehole(s), depth {H} m.\n"
+            f"T_in:  min {min(T_in):.1f} °C  max {max(T_in):.1f} °C  "
+            f"mean {sum(T_in)/n:.1f} °C\n"
+            f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
+            f"mean {sum(T_out)/n:.1f} °C"
+        )
+
+    return run_borehole_simulation
+
+
 _PROMPT_FRAGMENT = (
     "This app shows a map of Norwegian borehole data next to the chat (it "
     "appears the first time you use one of the tools below). Call "
@@ -1105,20 +1186,29 @@ _PROMPT_FRAGMENT = (
     "a reservoir-state image from the most recent run. The user's own map "
     "sidebar also has a 'Setup Simulation' button that resolves and runs these "
     "directly (bypassing you) for a selected well — if they used it, you'll "
-    "learn about the completed run the same way as any other UI event."
+    "learn about the completed run the same way as any other UI event.\n\n"
+    "Call `run_borehole_simulation` to run a pygfunction g-function borehole "
+    "heat exchanger simulation on the heating demands most recently generated "
+    "via the 'Generate energy demands' button. It returns hourly T_in/T_out "
+    "fluid temperatures and a 4-panel CairoMakie plot. You can vary borehole "
+    "depth, field geometry, ground thermal properties, and heat-pump COP — "
+    "the default parameters are reasonable starting points for Norwegian ground "
+    "conditions (Oslo gneiss, 200 m depth, single borehole)."
 )
 
 
-def geothermal_map_capability(data_path: str, simulation_jl_path: str) -> Capability:
+def geothermal_map_capability(
+    data_path: str,
+    simulation_jl_path: str,
+    pygsim_jl_path: str | None = None,
+) -> Capability:
     """The web capability for the geothermal map: well-lookup and simulation
     tools that drive the native ``map`` canvas panel (see
     ``canvas/MapPanel.tsx``).
 
-    ``data_path`` is the absolute path to the borehole GeoJSON file
-    (``examples/geothermal-map/data/all_boreholes.geojson``); ``simulation_jl_path``
-    is the absolute path to ``examples/geothermal-map/julia/simulation.jl`` — both
-    read/``include()``d directly, since the tools and these files live in the
-    same process now.
+    ``data_path`` is the absolute path to the borehole GeoJSON file;
+    ``simulation_jl_path`` is the absolute path to ``julia/simulation.jl``.
+    ``pygsim_jl_path`` is accepted for backwards compatibility but no longer used.
     """
     return Capability(
         name="geothermal-map",
@@ -1128,6 +1218,7 @@ def geothermal_map_capability(data_path: str, simulation_jl_path: str) -> Capabi
             lambda session: _make_go_to_well_park_tool(session, data_path),
             lambda session: _make_run_simulation_tool(session, simulation_jl_path),
             lambda session: _make_view_simulation_result_tool(session, simulation_jl_path),
+            _make_run_borehole_simulation_tool,
         ),
         prompt_fragment=_PROMPT_FRAGMENT,
         surfaces=("web",),

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import dataclasses
 import functools
@@ -41,10 +41,6 @@ class FluidParams:
     fluid_name: str = "Water"  # pygfunction fluid identifier
     concentration: float = 0.0  # antifreeze concentration [%] — 0 for pure water
     m_flow_per_borehole: float = 0.3  # mass flow rate per borehole [kg/s]
-
-
-# Geothermal gradient default — Oslo granite, matches geothermal-viz OSLO_DEFAULTS
-_GEOTHERMAL_GRADIENT_DEFAULT = 0.025  # K/m
 
 
 @functools.lru_cache(maxsize=256)
@@ -157,7 +153,7 @@ def simulate_borehole_temperatures(
     pipe: PipeParams | None = None,
     fluid: FluidParams | None = None,
     COP: float = 3.5,
-    geothermal_gradient: float = 0.025,
+    G: float = 0.025,
 ) -> pd.DataFrame:
     """Compute hourly fluid temperatures in a borehole field from a building thermal demand.
 
@@ -168,8 +164,7 @@ def simulate_borehole_temperatures(
     temperatures T_in / T_out at each time step.
 
     When lat and lon are provided, the undisturbed ground temperature T_g is
-    computed automatically from the ERA5-Land 1991-2020 climate normal and the
-    geothermal gradient.  Otherwise the value in BoreholeFieldParams.T_g is used.
+    computed automatically from the ERA5-Land 1991-2020 climate normal and G.
 
     Args:
         df_demand:
@@ -189,8 +184,7 @@ def simulate_borehole_temperatures(
         COP:
             Heat-pump COP used to derive the ground extraction load.
             Q_borehole = Q_building * (COP - 1) / COP.
-        geothermal_gradient:
-            Geothermal gradient [K/m] used when computing T_g from lat/lon.
+        G: Geothermal gradient [K/m] used when computing T_g from lat/lon.
 
     Returns:
         DataFrame with columns:
@@ -245,7 +239,7 @@ def simulate_borehole_temperatures(
         T_surface = fetch_mean_surface_temperature(lat, lon)
     else:
         T_surface = 7.0  # Oslo annual mean — fallback when no location is given
-    T_g = compute_field_undisturbed_ground_temperature(T_surface, boreholes, geothermal_gradient)
+    T_g = compute_field_undisturbed_ground_temperature(T_surface, boreholes, G)
 
     # -- fluid properties --
     fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
