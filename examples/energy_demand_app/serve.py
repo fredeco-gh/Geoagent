@@ -21,14 +21,22 @@ with ``python examples/geothermal-map/serve.py``.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
+
+# Must be set before any Julia subprocess starts so PythonCall uses the
+# project venv directly instead of spinning up a CondaPkg/pixi environment,
+# which hangs indefinitely when the pixi lock file is missing or stale.
+os.environ.setdefault("JULIA_CONDAPKG_BACKEND", "Null")
+os.environ.setdefault("JULIA_PYTHONCALL_EXE", sys.executable)
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DATA_DIR = EXAMPLE_DIR / "data"
 DATA_PATH = DATA_DIR / "all_boreholes.geojson"
 SIMULATION_JL = EXAMPLE_DIR / "julia" / "simulation.jl"
+PYGSIM_JL = EXAMPLE_DIR / "julia" / "pygfunction_sim.jl"
 
 # Pinned rather than left to default to the launching shell's cwd: a session's
 # Julia env (and its precompile-done marker) lives under <workspace>/.jutul-agent/,

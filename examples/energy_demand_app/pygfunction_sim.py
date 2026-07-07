@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,6 @@ class BoreholeFieldParams:
     N_1: int = 1  # number of boreholes in x direction
     N_2: int = 1  # number of boreholes in y direction
     B: float = 5.0  # borehole spacing [m] — geothermal-viz default
-    T_g: float = 7.0  # undisturbed ground temperature [degrees C] — Oslo mean
     k_s: float = 3.0  # ground thermal conductivity [W/(m K)] — Oslo gneiss/granite
     alpha: float = 1.33e-6  # ground thermal diffusivity [m^2/s] — k_s / (rho*cp) = 3.0 / (2650*850)
 
@@ -47,6 +47,7 @@ class FluidParams:
 _GEOTHERMAL_GRADIENT_DEFAULT = 0.025  # K/m
 
 
+@functools.lru_cache(maxsize=256)
 def fetch_mean_surface_temperature(
     lat: float,
     lon: float,
@@ -242,10 +243,9 @@ def simulate_borehole_temperatures(
     # and tilt in the length-weighted average (PDF formula for multi-borehole fields).
     if lat is not None and lon is not None:
         T_surface = fetch_mean_surface_temperature(lat, lon)
-        T_g = compute_field_undisturbed_ground_temperature(
-            T_surface, boreholes, geothermal_gradient
-        )
-        borehole = dataclasses.replace(borehole, T_g=T_g)
+    else:
+        T_surface = 7.0  # Oslo annual mean — fallback when no location is given
+    T_g = compute_field_undisturbed_ground_temperature(T_surface, boreholes, geothermal_gradient)
 
     # -- fluid properties --
     fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
@@ -295,7 +295,7 @@ def simulate_borehole_temperatures(
     for i in range(n_hours):
         LoadAgg.next_time_step(time_s[i])
         LoadAgg.set_current_load(Q_borehole_W[i] / H_total)  # W/m
-        T_b = borehole.T_g - LoadAgg.temporal_superposition()
+        T_b = T_g - LoadAgg.temporal_superposition()
 
         Q_i = Q_borehole_W[i] / N_b  # W per borehole (parallel connection)
         T_in_arr[i] = pipe_obj.get_inlet_temperature(Q_i, T_b, m_flow, cp_f)

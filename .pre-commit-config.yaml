@@ -5,11 +5,12 @@ repos:
     hooks:
       - id: ruff-format
         name: ruff format
-        entry: uv run ruff format
+        entry: .venv/Scripts/ruff format
         language: system
         types: [python]
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check --fix
+        entry: .venv/Scripts/ruff check --fix
+        language: system
         language: system
         types: [python]

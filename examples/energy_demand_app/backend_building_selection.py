@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -555,10 +556,82 @@ def _build_energy_demand_report_html(
 
 _energy_demand_run_count: dict[str, int] = {}
 
+# Warmup template: pre-compiles PythonCall and loads pygfunction_sim.jl into
+# the Julia kernel during session startup so the first agent call is fast.
+_PYGSIM_WARMUP_TEMPLATE = """
+try
+    ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
+    ENV["JULIA_PYTHONCALL_EXE"] = raw"__PYTHON_EXE__"
+    if !isdefined(Main, :run_borehole_simulation)
+        include(raw"__PYGSIM_JL_PATH__")
+    end
+catch
+end
+"""
+
+# Holds references to warmup tasks so asyncio doesn't GC them mid-flight.
+_pygsim_warmup_tasks: set[asyncio.Task[None]] = set()
+
+
+def start_pygsim_warmup(session: object, pygsim_jl_path: str) -> None:
+    """Fire-and-forget: pre-compile PythonCall and load pygfunction_sim.jl.
+
+    Shifts the JIT cost from the first agent call to session startup, where
+    it runs alongside the Fimbul warmup and the user already expects a delay.
+    Retried for up to 30 s in case the kernel is still busy with the Fimbul
+    warmup when this fires.
+    """
+    import sys
+
+    python_exe = sys.executable.replace("\\", "/")
+    jl_path = Path(pygsim_jl_path).resolve().as_posix()
+    code = _PYGSIM_WARMUP_TEMPLATE.replace("__PYTHON_EXE__", python_exe).replace(
+        "__PYGSIM_JL_PATH__", jl_path
+    )
+
+    async def _run() -> None:
+        for attempt in range(30):
+            try:
+                await session.julia.eval(code)  # type: ignore[attr-defined]
+                return
+            except Exception:
+                if attempt == 29:
+                    return  # best-effort
+                await asyncio.sleep(1.0)
+
+    task = asyncio.create_task(_run())
+    _pygsim_warmup_tasks.add(task)
+    task.add_done_callback(_pygsim_warmup_tasks.discard)
+
+
+# Julia template that runs the pygfunction borehole simulation via the
+# PythonCall overlay (examples/energy_demand_app/julia/pygfunction_sim.jl).
+# Paths are injected by make_generate_energy_demands_action at call time.
+_PYGSIM_TEMPLATE = """
+begin
+    ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
+    ENV["JULIA_PYTHONCALL_EXE"] = raw"__PYTHON_EXE__"
+    if !isdefined(Main, :run_borehole_simulation)
+        include(raw"__PYGSIM_JL_PATH__")
+    end
+    import JSON3
+    local _inp    = JSON3.read(read(raw"__INPUT_PATH__", String))
+    local _ts     = [String(v)  for v in _inp["timestamps"]]
+    local _kw     = [Float64(v) for v in _inp["demand_kw"]]
+    local _result = run_borehole_simulation(_ts, _kw;
+        lat = Float64(_inp["lat"]),
+        lon = Float64(_inp["lon"]),
+    )
+    open(raw"__OUTPUT_PATH__", "w") do io
+        JSON3.write(io, _result)
+    end
+    "ok"
+end
+"""
+
 
 def make_generate_energy_demands_action():
     """Action handler for the energy panel's 'Generate energy demands' button."""
-    import asyncio
     import uuid
     from collections.abc import Awaitable, Callable
     from typing import Any
@@ -632,13 +705,23 @@ def make_generate_energy_demands_action():
             from pygfunction_sim import simulate_borehole_temperatures
 
             df_borehole = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: simulate_borehole_temperatures(df_demand, lat=lat, lon=lon)
+                None,
+                lambda: simulate_borehole_temperatures(
+                    df_demand[["time", demand_col]].rename(columns={demand_col: "kW"}),
+                    lat=lat,
+                    lon=lon,
+                ),
             )
-            borehole_records = (
-                df_borehole[["time", "T_in", "T_out"]]
-                .assign(time=df_borehole["time"].astype(str))
-                .to_dict(orient="records")
-            )
+
+            borehole_records = [
+                {"time": str(ts), "T_in": float(tin), "T_out": float(tout)}
+                for ts, tin, tout in zip(
+                    df_borehole["time"],
+                    df_borehole["T_in"],
+                    df_borehole["T_out"],
+                    strict=False,
+                )
+            ]
 
             html = _build_energy_demand_report_html(
                 bygningsnummer, year, demand_type, records, borehole_records
