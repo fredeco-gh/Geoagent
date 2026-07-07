@@ -1091,14 +1091,22 @@ def make_setup_simulation_action(simulation_jl_path: str):
 def _make_run_borehole_simulation_tool(session: Session):
     @tool
     async def run_borehole_simulation(  # noqa: PLR0913
-        H: float = 200.0,
-        D: float = 4.0,
-        r_b: float = 0.070,
         N_1: int = 1,
         N_2: int = 1,
         B: float = 5.0,
+        H: float = 200.0,
+        D: float = 4.0,
+        r_b: float = 0.070,
+        tilt: float = 0.0,
+        orientation: float = 0.0,
         k_s: float = 3.0,
         alpha: float = 1.33e-6,
+        r_in: float = 0.015,
+        r_out: float = 0.020,
+        D_s: float = 0.040,
+        k_p: float = 0.42,
+        k_g: float = 1.0,
+        epsilon: float = 1e-6,
         COP: float = 3.5,
         G: float = 0.025,
     ) -> str:
@@ -1111,21 +1119,34 @@ def _make_run_borehole_simulation_tool(session: Session):
         climate normals at the building's coordinates.
 
         Args:
-            H: Active borehole depth [m]. Default 200.
-            D: Buried depth from surface to top of active section [m]. Default 4.
-            r_b: Borehole radius [m]. Default 0.070 (140 mm diameter).
             N_1: Number of boreholes in the x direction. Default 1.
             N_2: Number of boreholes in the y direction. Default 1.
             B: Borehole spacing [m]. Default 5.
+            H: Active borehole length [m]. Default 200.
+            D: Buried depth from surface to top of active section [m]. Default 4.
+            r_b: Borehole radius [m]. Default 0.070 (140 mm diameter).
+            tilt: Borehole tilt angle from vertical [radians]. Default 0.
+            orientation: Azimuthal direction of tilt [radians]. Default 0.
             k_s: Ground thermal conductivity [W/(m·K)]. Default 3.0.
             alpha: Ground thermal diffusivity [m²/s]. Default 1.33e-6.
+            r_in: Pipe inner radius [m]. Default 0.015.
+            r_out: Pipe outer radius [m]. Default 0.020.
+            D_s: Shank spacing, borehole centre to pipe centre [m]. Default 0.040.
+            k_p: Pipe wall thermal conductivity [W/(m·K)]. Default 0.42 (HDPE).
+            k_g: Grout thermal conductivity [W/(m·K)]. Default 1.0.
+            epsilon: Pipe inner-wall roughness [m]. Default 1e-6.
             COP: Heat-pump coefficient of performance. Default 3.5.
             G: Geothermal gradient [K/m]. Default 0.025.
         """
         import pandas as pd
 
         from backend_building_selection import get_session_demand_data
-        from pygfunction_sim import BoreholeFieldParams, simulate_borehole_temperatures
+        from pygfunction_sim import (
+            GroundParams,
+            PipeParams,
+            rectangle_field,
+            simulate_borehole_temperatures,
+        )
 
         demand = get_session_demand_data(session.session_id)
         if demand is None:
@@ -1136,9 +1157,6 @@ def _make_run_borehole_simulation_tool(session: Session):
             )
 
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
-        borehole_params = BoreholeFieldParams(
-            H=H, D=D, r_b=r_b, N_1=N_1, N_2=N_2, B=B, k_s=k_s, alpha=alpha
-        )
         try:
             df_result = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -1146,7 +1164,9 @@ def _make_run_borehole_simulation_tool(session: Session):
                     df,
                     lat=demand.get("lat"),
                     lon=demand.get("lon"),
-                    borehole=borehole_params,
+                    boreholes=rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation),
+                    ground=GroundParams(k_s=k_s, alpha=alpha),
+                    pipe=PipeParams(r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p, k_g=k_g, epsilon=epsilon),
                     COP=COP,
                     G=G,
                 ),

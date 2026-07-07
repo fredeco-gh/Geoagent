@@ -9,17 +9,42 @@ import pygfunction as gt
 
 
 @dataclasses.dataclass
-class BoreholeFieldParams:
-    """Geometric and ground-thermal parameters for a borehole field."""
+class BoreholeParams:
+    """Geometric parameters for a single borehole."""
 
-    H: float = 200.0  # active borehole depth [m] — geothermal-viz default
+    H: float = 200.0  # active borehole depth [m]
     D: float = 4.0  # buried depth from surface to top of active section [m]
-    r_b: float = 0.070  # borehole radius [m] — from borehole_diameter 140 mm
-    N_1: int = 1  # number of boreholes in x direction
-    N_2: int = 1  # number of boreholes in y direction
-    B: float = 5.0  # borehole spacing [m] — geothermal-viz default
-    k_s: float = 3.0  # ground thermal conductivity [W/(m K)] — Oslo gneiss/granite
-    alpha: float = 1.33e-6  # ground thermal diffusivity [m^2/s] — k_s / (rho*cp) = 3.0 / (2650*850)
+    r_b: float = 0.070  # borehole radius [m]
+    x: float = 0.0  # horizontal position [m]
+    y: float = 0.0  # horizontal position [m]
+    tilt: float = 0.0  # tilt angle from vertical [radians]
+    orientation: float = 0.0  # azimuthal direction of tilt [radians]
+
+
+@dataclasses.dataclass
+class GroundParams:
+    """Ground thermal properties, uniform across the borehole field."""
+
+    k_s: float = 3.0  # thermal conductivity [W/(m K)] — Oslo gneiss/granite
+    alpha: float = 1.33e-6  # thermal diffusivity [m²/s] — k_s / (rho*cp) = 3.0 / (2650*850)
+
+
+def rectangle_field(
+    N_1: int,
+    N_2: int,
+    B: float,
+    H: float = 200.0,
+    D: float = 4.0,
+    r_b: float = 0.070,
+    tilt: float = 0.0,
+    orientation: float = 0.0,
+) -> list[BoreholeParams]:
+    """Generate a rectangular N_1 × N_2 grid of boreholes with uniform spacing B."""
+    return [
+        BoreholeParams(H=H, D=D, r_b=r_b, x=i * B, y=j * B, tilt=tilt, orientation=orientation)
+        for i in range(N_1)
+        for j in range(N_2)
+    ]
 
 
 @dataclasses.dataclass
@@ -149,9 +174,10 @@ def simulate_borehole_temperatures(
     df_demand: pd.DataFrame,
     lat: float | None = None,
     lon: float | None = None,
-    borehole: BoreholeFieldParams | None = None,
+    boreholes: list[BoreholeParams] | None = None,
     pipe: PipeParams | None = None,
     fluid: FluidParams | None = None,
+    ground: GroundParams | None = None,
     COP: float = 3.5,
     G: float = 0.025,
 ) -> pd.DataFrame:
@@ -172,9 +198,10 @@ def simulate_borehole_temperatures(
             The first non-'time' column is used as the demand series.
         lat: Latitude of the site [degrees N]. Used to fetch T_surface from ERA5.
         lon: Longitude of the site [degrees E].
-        borehole:
-            Borehole field geometry and ground thermal properties.
-            Defaults to a single 200 m borehole in typical Norwegian ground.
+        boreholes:
+            List of BoreholeParams, one entry per borehole. Use rectangle_field()
+            to generate this list for a uniform grid. Defaults to a single 200 m
+            borehole at the origin.
         pipe:
             Single U-tube pipe and grout parameters.
             Defaults to 40 mm OD HDPE pipes in standard grout.
@@ -184,6 +211,7 @@ def simulate_borehole_temperatures(
         COP:
             Heat-pump COP used to derive the ground extraction load.
             Q_borehole = Q_building * (COP - 1) / COP.
+        ground: Ground thermal properties (k_s, alpha). Uniform across the field.
         G: Geothermal gradient [K/m] used when computing T_g from lat/lon.
 
     Returns:
@@ -194,12 +222,14 @@ def simulate_borehole_temperatures(
             T_in            -- fluid inlet temperature [degrees C]
             T_out           -- fluid outlet temperature [degrees C]
     """
-    if borehole is None:
-        borehole = BoreholeFieldParams()
+    if boreholes is None:
+        boreholes = [BoreholeParams()]
     if pipe is None:
         pipe = PipeParams()
     if fluid is None:
         fluid = FluidParams()
+    if ground is None:
+        ground = GroundParams()
 
     # -- demand series --
     df = df_demand.copy()
@@ -220,17 +250,12 @@ def simulate_borehole_temperatures(
     Q_borehole_W = Q_building_W * (COP - 1.0) / COP
 
     # -- borehole field --
-    boreholes = gt.boreholes.rectangle_field(
-        borehole.N_1,
-        borehole.N_2,
-        borehole.B,
-        borehole.B,
-        borehole.H,
-        borehole.D,
-        borehole.r_b,
-    )
-    N_b = len(boreholes)
-    H_total = sum(b.H for b in boreholes)
+    boreholes_gt = [
+        gt.boreholes.Borehole(b.H, b.D, b.r_b, b.x, b.y, b.tilt, b.orientation)
+        for b in boreholes
+    ]
+    N_b = len(boreholes_gt)
+    H_total = sum(b.H for b in boreholes_gt)
 
     # -- undisturbed ground temperature --
     # Computed after the field is built so we can use each borehole's actual H, D,
@@ -239,7 +264,7 @@ def simulate_borehole_temperatures(
         T_surface = fetch_mean_surface_temperature(lat, lon)
     else:
         T_surface = 7.0  # Oslo annual mean — fallback when no location is given
-    T_g = compute_field_undisturbed_ground_temperature(T_surface, boreholes, G)
+    T_g = compute_field_undisturbed_ground_temperature(T_surface, boreholes_gt, G)
 
     # -- fluid properties --
     fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
@@ -262,8 +287,8 @@ def simulate_borehole_temperatures(
         pos,
         pipe.r_in,
         pipe.r_out,
-        boreholes[0],
-        borehole.k_s,
+        boreholes_gt[0],
+        ground.k_s,
         pipe.k_g,
         R_fp,
     )
@@ -274,12 +299,12 @@ def simulate_borehole_temperatures(
 
     # -- g-function --
     gFunc = gt.gfunction.gFunction(
-        boreholes,
-        borehole.alpha,
+        boreholes_gt,
+        ground.alpha,
         time=time_req,
         options={"nSegments": 8},
     )
-    LoadAgg.initialize(gFunc.gFunc / (2.0 * np.pi * borehole.k_s))
+    LoadAgg.initialize(gFunc.gFunc / (2.0 * np.pi * ground.k_s))
 
     # -- hourly simulation loop --
     time_s = np.arange(1, n_hours + 1) * dt  # cumulative seconds
