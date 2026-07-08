@@ -1802,6 +1802,180 @@ def _make_view_borehole_gfunction_tool(session: Session):
 
     return view_borehole_gfunction
 
+def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
+    @tool
+    async def run_fimbul_validation(  # noqa: PLR0913
+        N_1: int = 1,
+        N_2: int = 1,
+        B: float = 5.0,
+        H: float = 200.0,
+        D: float = 4.0,
+        r_b: float = 0.070,
+        tilt: float = 0.0,
+        orientation: float = 0.0,
+        k_s: float = 3.0,
+        alpha: float = 1.33e-6,
+        r_in: float = 0.015,
+        r_out: float = 0.020,
+        D_s: float = 0.040,
+        k_p: float = 0.42,
+        k_g: float = 1.0,
+        epsilon: float = 1e-6,
+        COP: float = 3.5,
+        G: float = 0.025,
+        pattern: str = "rectangular",
+        window_hours: int = 24,
+    ) -> str:
+        """Validate a pygfunction borehole geometry with a Fimbul PDE simulation.
+
+        Runs pygfunction with the given parameters (identical to run_borehole_simulation)
+        to obtain T_in, aggregates it into windows of `window_hours` hours (default:
+        daily), then prescribes each window's mean T_in as the Fimbul injection
+        temperature. Returns T_out and net extracted heat energy per window.
+
+        All parameters must match the run_borehole_simulation call being validated
+        to ensure a faithful comparison. Use view_fimbul_validation to plot.
+
+        Args:
+            N_1: Number of boreholes in x (rectangular) or total boreholes. Default 1.
+            N_2: Number of boreholes in y (rectangular) or polygon sides. Default 1.
+            B: Borehole spacing [m] or sunflower radius [m]. Default 5.
+            H: Active borehole depth [m]. Default 200.
+            D: Buried depth [m]. Default 4.
+            r_b: Borehole radius [m]. Default 0.070.
+            tilt: Tilt angle from vertical [radians]. Default 0.
+            orientation: Azimuthal direction of tilt [radians]. Default 0.
+            k_s: Ground thermal conductivity [W/(m·K)]. Default 3.0.
+            alpha: Ground thermal diffusivity [m²/s]. Default 1.33e-6.
+            r_in: Pipe inner radius [m]. Default 0.015.
+            r_out: Pipe outer radius [m]. Default 0.020.
+            D_s: Shank spacing [m]. Default 0.040.
+            k_p: Pipe wall thermal conductivity [W/(m·K)]. Default 0.42.
+            k_g: Grout thermal conductivity [W/(m·K)]. Default 1.0.
+            epsilon: Pipe roughness [m]. Default 1e-6.
+            COP: Heat-pump COP. Default 3.5.
+            G: Geothermal gradient [K/m]. Default 0.025.
+            pattern: Field layout — "rectangular", "sunflower", "circular",
+                or "polygonal". Default "rectangular".
+            window_hours: Averaging window width in hours. Default 24 (daily).
+        """
+        import asyncio
+
+        import pandas as pd
+        import pygfunction as gt
+
+        from backend_building_selection import get_session_demand_data
+        from pygfunction_sim import (
+            FluidParams,
+            GroundParams,
+            PipeParams,
+            circular_field,
+            fetch_mean_surface_temperature,
+            polygonal_field,
+            rectangle_field,
+            simulate_borehole_temperatures,
+            sunflower_field,
+        )
+
+        demand = get_session_demand_data(session.session_id)
+        if demand is None:
+            return "No demand data found. Click 'Generate energy demands' first."
+
+        df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
+        if pattern == "rectangular":
+            boreholes = [[b] for b in rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation)]
+        elif pattern == "sunflower":
+            boreholes = [[b] for b in sunflower_field(N_1, B, H, D, r_b, tilt, orientation)]
+        elif pattern == "circular":
+            boreholes = [[b] for b in circular_field(N_1, B, H, D, r_b, tilt, orientation)]
+        elif pattern == "polygonal":
+            boreholes = [[b] for b in polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation)]
+        else:
+            return f"Unknown pattern {pattern!r}."
+
+        try:
+            df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: simulate_borehole_temperatures(
+                    df,
+                    lat=demand.get("lat"),
+                    lon=demand.get("lon"),
+                    boreholes=boreholes,
+                    ground=GroundParams(k_s=k_s, alpha=alpha),
+                    pipe=PipeParams(r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p,
+                                    k_g=k_g, epsilon=epsilon),
+                    COP=COP,
+                    G=G,
+                ),
+            )
+        except Exception as exc:
+            return f"pygfunction failed: {exc}"
+
+        T_in_avg, durations_s = _aggregate_tin_profile(
+            df_result["T_in"].tolist(), window_hours=window_hours
+        )
+
+        N = N_1 * N_2 if pattern == "rectangular" else N_1
+        T_surface = fetch_mean_surface_temperature(demand["lat"], demand["lon"])
+        fluid = FluidParams()
+        fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
+
+        setup = {
+            "num_boreholes":       N,
+            "num_sectors":         N,
+            "H":                   H,
+            "B":                   B,
+            "k_s":                 k_s,
+            "G":                   G,
+            "T_surface_C":         T_surface,
+            "m_flow_per_borehole": fluid.m_flow_per_borehole,
+            "rho_fluid":           fl.rho,
+            "cp_fluid":            fl.cp,
+            "T_in_C":              T_in_avg,
+            "durations_s":         durations_s,
+        }
+
+        result_path = (
+            session.output_dir / "artifacts" /
+            f"val-result-{uuid.uuid4().hex[:8]}.json"
+        )
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        code = _render_template(
+            _BTES_VALIDATION_TEMPLATE,
+            JL_PATH=Path(simulation_jl_path).resolve().as_posix(),
+            SETUP_JSON=json.dumps(setup),
+            RESULT_PATH=result_path.as_posix(),
+        )
+
+        jl_result = await session.julia.eval(code)
+        if jl_result.error:
+            return f"Julia error: {jl_result.error}"
+
+        val = json.loads(result_path.read_text(encoding="utf-8"))
+        if val.get("status") != "completed":
+            return f"Fimbul error: {val.get('message', 'unknown')}"
+
+        _session_fimbul_validation_results[session.session_id] = {
+            "window_hours": window_hours,
+            "T_in_C":       val["T_in_C"],
+            "T_out_C":      val["T_out_C"],
+            "energy_kWh":   val["energy_kWh"],
+            "durations_s":  val["durations_s"],
+            "n_periods":    val["n_periods"],
+        }
+
+        T_out = val["T_out_C"]
+        n = val["n_periods"]
+        return (
+            f"Fimbul validation: {n} windows of {window_hours} h.\n"
+            f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
+            f"mean {sum(T_out)/n:.1f} °C\n"
+            f"Total extracted energy: {val['total_energy_kWh']:.0f} kWh\n"
+            "Use view_fimbul_validation to plot."
+        )
+
+    return run_fimbul_validation
+
 
 _PROMPT_FRAGMENT = (
     "This app shows a map of Norwegian borehole data next to the chat (it "
@@ -1838,7 +2012,15 @@ _PROMPT_FRAGMENT = (
     "combination. Keep individual lists short — the total number of simulations "
     "is the product of all list lengths. After the sweep, call "
     "`run_borehole_simulation` with the best combination if the user wants to "
-    "inspect or plot that configuration."
+    "inspect or plot that configuration.\n\n"
+    "Call `run_fimbul_validation` to validate a borehole geometry with a full "
+    "Fimbul PDE simulation. It runs pygfunction internally with the given "
+    "parameters to obtain T_in, aggregates it into daily windows (configurable "
+    "via `window_hours`), prescribes each window's mean T_in as the Fimbul "
+    "injection temperature, and returns T_out and net extracted energy per "
+    "window. Pass exactly the same parameters as the `run_borehole_simulation` "
+    "call being validated (N_1, N_2, B, H, D, r_b, k_s, G, pattern, etc.) so "
+    "the comparison is faithful. "
 )
 
 
@@ -1869,6 +2051,8 @@ def geothermal_map_capability(
             _make_plot_borehole_gfunction_tool,
             _make_view_borehole_temperatures_tool,
             _make_view_borehole_gfunction_tool,
+            lambda session: _make_run_fimbul_validation_tool(session, simulation_jl_path),
+            
         ),
         prompt_fragment=_PROMPT_FRAGMENT,
         surfaces=("web",),

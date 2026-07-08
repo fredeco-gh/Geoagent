@@ -694,10 +694,10 @@ function run_btes_validation(setup::AbstractDict)
         n_periods   = length(T_in_C)
         @assert length(durations_s) == n_periods "T_in_C and durations_s must have equal length"
 
-        T_surf_K    = convert_to_si(T_surf_C, :Celsius)
-        G_SI        = G * Kelvin/meter
+        T_surf_K    = Fimbul.convert_to_si(T_surf_C, :Celsius)
+        G_SI        = G * Fimbul.Kelvin/Fimbul.meter
         rate_SI     = m_flow / rho_f
-        T_in_mean_K = convert_to_si(sum(T_in_C) / n_periods, :Celsius)
+        T_in_mean_K = Fimbul.convert_to_si(sum(T_in_C) / n_periods, :Celsius)
         depths      = [0.0, 0.5, H, H + 15.0]
 
         _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, H=$(H) m, B=$(B) m...")
@@ -709,7 +709,7 @@ function run_btes_validation(setup::AbstractDict)
             num_sectors           = num_sectors,
             well_spacing          = B,
             depths                = depths,
-            thermal_conductivity  = [0.034, k_s, k_s] .* watt/meter/Kelvin,
+            thermal_conductivity  = [0.034, k_s, k_s] .* Fimbul.watt/Fimbul.meter/Fimbul.Kelvin,
             geothermal_gradient   = G_SI,
             temperature_charge    = T_in_mean_K,
             temperature_discharge = T_in_mean_K,
@@ -729,14 +729,14 @@ function run_btes_validation(setup::AbstractDict)
 
         rho      = reservoir_model(model).system.rho_ref[1]
         rate_tgt = TotalRateTarget(rate_SI)
-        bhp_tgt  = BottomHolePressureTarget(1.0si_unit(:atm))
+        bhp_tgt  = BottomHolePressureTarget(1.0Jutul.si_unit(:atm))
         is_sup(w) = endswith(String(w), "_supply")
         is_ret(w) = endswith(String(w), "_return")
 
         # Build one force set per period — only injection temperature varies
         forces_list = Any[]
         for T_C in T_in_C
-            T_K  = convert_to_si(T_C, :Celsius)
+            T_K  = Fimbul.convert_to_si(T_C, :Celsius)
             ctrl = Dict()
             for (_, sec_wells) in pairs(sectors)
                 supply = filter(is_sup, collect(sec_wells))
@@ -768,7 +768,7 @@ function run_btes_validation(setup::AbstractDict)
             collect(Float64, results.wells[filter(is_ret, collect(sw))[end]][:Temperature])
             for (_, sw) in pairs(sectors)
         ) ./ length(sectors)
-        T_out_C = convert_from_si.(T_out_K, :Celsius)
+        T_out_C = Fimbul.convert_from_si.(T_out_K, :Celsius)
 
         # Extracted energy per period [kWh] = N_sectors · ṁ · cp · ΔT · Δt
         energy_kWh = [
@@ -789,10 +789,12 @@ function run_btes_validation(setup::AbstractDict)
             "n_periods"        => n_periods,
         )
     catch e
-        _sim_log_push!("ERROR: $(sprint(showerror, e))")
+        bt  = catch_backtrace()
+        msg = sprint(showerror, e, bt)
+        _sim_log_push!("ERROR: $msg")
         return Dict{String,Any}(
             "status"  => "error",
-            "message" => "Validation failed: $(sprint(showerror, e))",
+            "message" => "Validation failed: $msg",
         )
     end
 end
