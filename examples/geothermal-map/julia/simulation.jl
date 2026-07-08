@@ -18,10 +18,11 @@ Typical workflow:
 
 using Fimbul
 using Dates
-using CairoMakie
 using Jutul
 using JutulDarcy
 import Base64: base64encode
+# CairoMakie is loaded separately (see _start_cairo_warmup in capability.py)
+# so that including this file doesn't block the Julia kernel during session start.
 
 # ── Server-side state for lazy reservoir image rendering ─────────────────────
 

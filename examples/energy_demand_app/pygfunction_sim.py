@@ -284,7 +284,7 @@ def simulate_borehole_temperatures(
     df_demand: pd.DataFrame,
     lat: float | None = None,
     lon: float | None = None,
-    boreholes: list[BoreholeParams] | None = None,
+    boreholes: list[list[BoreholeParams]] | None = None,
     pipe: PipeParams | None = None,
     fluid: FluidParams | None = None,
     ground: GroundParams | None = None,
@@ -295,9 +295,16 @@ def simulate_borehole_temperatures(
 
     Converts building heating demand to a ground extraction load via
     Q_borehole = Q_building * (COP - 1) / COP, then uses pygfunction's
-    g-function / Claesson-Javed load aggregation / SingleUTube pipe model to
-    obtain the borehole wall temperature T_b and carrier-fluid inlet and outlet
-    temperatures T_in / T_out at each time step.
+    g-function / Claesson-Javed load aggregation to obtain the borehole wall
+    temperature T_b and pygfunction's Network pipe model to obtain carrier-fluid
+    inlet and outlet temperatures T_in / T_out at each time step.
+
+    The field is organised as a series-parallel network: ``boreholes`` is a nested
+    list where each inner list is one *sector*.  Boreholes within a sector are
+    connected in series (fluid flows sequentially in the order listed); sectors
+    are connected in parallel (all sectors share the same network inlet).
+    Pass ``[[b] for b in flat_list]`` to get an all-parallel field (one borehole
+    per sector), which recovers the standard BTES parallel configuration.
 
     When lat and lon are provided, the undisturbed ground temperature T_g is
     computed automatically from the ERA5-Land 1991-2020 climate normal and G.
@@ -309,15 +316,16 @@ def simulate_borehole_temperatures(
         lat: Latitude of the site [degrees N]. Used to fetch T_surface from ERA5.
         lon: Longitude of the site [degrees E].
         boreholes:
-            List of BoreholeParams, one entry per borehole. Use rectangle_field()
-            to generate this list for a uniform grid. Defaults to a single 200 m
-            borehole at the origin.
+            Nested list of BoreholeParams.  Outer list = sectors (parallel);
+            inner list = boreholes within a sector (series, in order).
+            Defaults to a single sector containing one 200 m borehole.
         pipe:
             Single U-tube pipe and grout parameters.
             Defaults to 40 mm OD HDPE pipes in standard grout.
         fluid:
-            Carrier fluid, antifreeze concentration, and mass flow rate.
-            Defaults to pure water.
+            Carrier fluid, antifreeze concentration, and mass flow rate per
+            borehole (= mass flow rate per sector, since boreholes in a sector
+            share the same flow).  Defaults to pure water at 0.3 kg/s.
         COP:
             Heat-pump COP used to derive the ground extraction load.
             Q_borehole = Q_building * (COP - 1) / COP.
@@ -329,11 +337,11 @@ def simulate_borehole_temperatures(
             time            -- original timestamps
             Q_building_kW   -- building thermal demand [kW]
             Q_borehole_kW   -- ground extraction load [kW]
-            T_in            -- fluid inlet temperature [degrees C]
-            T_out           -- fluid outlet temperature [degrees C]
+            T_in            -- network inlet temperature [degrees C]
+            T_out           -- network outlet temperature [degrees C]
     """
     if boreholes is None:
-        boreholes = [BoreholeParams()]
+        boreholes = [[BoreholeParams()]]
     if pipe is None:
         pipe = PipeParams()
     if fluid is None:
@@ -360,12 +368,23 @@ def simulate_borehole_temperatures(
     Q_borehole_W = Q_building_W * (COP - 1.0) / COP
 
     # -- borehole field --
+    # Flatten the nested sector list; preserve sector structure for connectivity.
+    boreholes_flat = [b for sector in boreholes for b in sector]
+    N_sectors = len(boreholes)
     boreholes_gt = [
         gt.boreholes.Borehole(b.H, b.D, b.r_b, b.x, b.y, b.tilt, b.orientation)
-        for b in boreholes
+        for b in boreholes_flat
     ]
-    N_b = len(boreholes_gt)
     H_total = sum(b.H for b in boreholes_gt)
+
+    # bore_connectivity[i] = index of the upstream borehole that feeds borehole i,
+    # or -1 if borehole i is connected directly to the network inlet.
+    bore_connectivity: list[int] = []
+    offset = 0
+    for sector in boreholes:
+        for j in range(len(sector)):
+            bore_connectivity.append(-1 if j == 0 else offset + j - 1)
+        offset += len(sector)
 
     # -- undisturbed ground temperature --
     # Computed after the field is built so we can use each borehole's actual H, D,
@@ -391,17 +410,19 @@ def simulate_borehole_temperatures(
     )
     R_fp = 1.0 / (h_f * 2.0 * np.pi * pipe.r_in) + R_p  # [(m K)/W]
 
-    # -- SingleUTube pipe object (identical for every borehole in the field) --
+    # -- series-parallel network --
+    # One SingleUTube per borehole (own r_b → own grout resistance; own H → own NTU).
     pos = [(-pipe.D_s, 0.0), (pipe.D_s, 0.0)]
-    pipe_obj = gt.pipes.SingleUTube(
-        pos,
-        pipe.r_in,
-        pipe.r_out,
-        boreholes_gt[0],
-        ground.k_s,
-        pipe.k_g,
-        R_fp,
-    )
+    pipe_objs = [
+        gt.pipes.SingleUTube(pos, pipe.r_in, pipe.r_out, b, ground.k_s, pipe.k_g, R_fp)
+        for b in boreholes_gt
+    ]
+    network = gt.networks.Network(boreholes_gt, pipe_objs, bore_connectivity)
+
+    # Sectors are in parallel → total network flow = N_sectors × m_flow_per_sector.
+    # Boreholes within a sector are in series → same m_flow passes through each.
+    m_flow_network = N_sectors * m_flow
+
 
     # -- Claesson-Javed load aggregation --
     LoadAgg = gt.load_aggregation.ClaessonJaved(dt, tmax)
@@ -426,9 +447,12 @@ def simulate_borehole_temperatures(
         LoadAgg.set_current_load(Q_borehole_W[i] / H_total)  # W/m
         T_b = T_g - LoadAgg.temporal_superposition()
 
-        Q_i = Q_borehole_W[i] / N_b  # W per borehole (parallel connection)
-        T_in_arr[i] = pipe_obj.get_inlet_temperature(Q_i, T_b, m_flow, cp_f)
-        T_out_arr[i] = pipe_obj.get_outlet_temperature(T_in_arr[i], T_b, m_flow, cp_f)
+        T_in_arr[i] = network.get_network_inlet_temperature(
+            Q_borehole_W[i], T_b, m_flow_network, cp_f, nSegments=1
+        )
+        T_out_arr[i] = network.get_network_outlet_temperature(
+            T_in_arr[i], T_b, m_flow_network, cp_f, nSegments=1
+        )
 
     df_out = pd.DataFrame(
         {

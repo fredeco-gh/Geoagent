@@ -476,7 +476,6 @@ _warmup_tasks: set[asyncio.Task[None]] = set()
 
 _WARMUP_TEMPLATE = """
 try
-    using CairoMakie
     if !isdefined(Main, :well_to_simulation_params)
         include(raw"__JL_PATH__")
     end
@@ -484,19 +483,23 @@ catch
 end
 """
 
+# Loaded lazily after setup_simulation responds (see _start_cairo_warmup) so
+# CairoMakie's slow first-load doesn't block "Setup Simulation".
+_CAIRO_WARMUP_CODE = """
+try
+    using CairoMakie
+catch
+end
+"""
+
+# Per-session guard: CairoMakie only needs to be kicked off once.
+_cairo_warmup_started: set[str] = set()
+
 
 async def _warm_simulation_jl(julia: Any, simulation_jl_path: str, *, attempts: int = 30) -> None:
-    """Load simulation.jl's one dependency the agent's own per-simulator warm-up
-    doesn't already cover: CairoMakie, a separate (and notably slow to load)
-    plotting backend used for the static reservoir-state renders, which nothing
-    else pulls in. Without this, whichever of run_simulation,
-    view_simulation_result, or the map's "Setup Simulation" runs first on a
-    given kernel pays that load cost synchronously, in the user's face.
-
-    Retried for a while: only one eval can be in flight on a kernel at a time,
-    and jutul_agent.simulators.warmup.start_warmup (the agent's own
-    Fimbul/JutulDarcy/GLMakie warm-up) is very likely still running on the same
-    kernel when this starts. Raises if every attempt fails.
+    """Include simulation.jl into the kernel, retrying until the Fimbul warmup
+    releases it. CairoMakie is intentionally excluded here — it is deferred to
+    _start_cairo_warmup so it doesn't block setup_simulation.
     """
     code = _render_template(_WARMUP_TEMPLATE, JL_PATH=Path(simulation_jl_path).resolve().as_posix())
     for attempt in range(attempts):
@@ -510,15 +513,31 @@ async def _warm_simulation_jl(julia: Any, simulation_jl_path: str, *, attempts: 
 
 
 def start_simulation_warmup(session: Session, simulation_jl_path: str) -> None:
-    """Fire-and-forget ``_warm_simulation_jl`` on a chat session's own kernel,
-    right when the session starts, so run_simulation / view_simulation_result
-    don't pay CairoMakie's load cost on first use. Best-effort: a chat session
-    that never calls either tool just wasted a background eval.
+    """Fire-and-forget: include simulation.jl at session start so setup_simulation
+    finds it already loaded. CairoMakie is deferred — see _start_cairo_warmup.
     """
 
     async def _run() -> None:
         with contextlib.suppress(Exception):
             await _warm_simulation_jl(session.julia, simulation_jl_path)
+
+    task = asyncio.create_task(_run())
+    _warmup_tasks.add(task)
+    task.add_done_callback(_warmup_tasks.discard)
+
+
+def _start_cairo_warmup(session: Session) -> None:
+    """Fire-and-forget: load CairoMakie in the background after setup_simulation
+    has already responded, so it's ready by the time view_simulation_result runs.
+    Idempotent — safe to call from every setup_simulation response.
+    """
+    if session.session_id in _cairo_warmup_started:
+        return
+    _cairo_warmup_started.add(session.session_id)
+
+    async def _run() -> None:
+        with contextlib.suppress(Exception):
+            await session.julia.eval(_CAIRO_WARMUP_CODE)
 
     task = asyncio.create_task(_run())
     _warmup_tasks.add(task)
@@ -1092,6 +1111,7 @@ def make_setup_simulation_action(simulation_jl_path: str):
                 "target": _MAP_TARGET,
             }
         )
+        _start_cairo_warmup(session)
 
     return setup_simulation_action
 
@@ -1176,14 +1196,14 @@ def _make_run_borehole_simulation_tool(session: Session):
 
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
         try:
-            if pattern == "rectangular": 
-                boreholes = rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation)
-            elif pattern == "sunflower": 
-                boreholes = sunflower_field(N_1,B,H,D,r_b,tilt,orientation)
-            elif pattern == "circular": 
-                boreholes = circular_field(N_1, B, H, D, r_b, tilt, orientation)
-            elif pattern == "polygonal": 
-                boreholes = polygonal_field(N_1,B,N_2,H,D,r_b,tilt,orientation)
+            if pattern == "rectangular":
+                boreholes = [[b] for b in rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation)]
+            elif pattern == "sunflower":
+                boreholes = [[b] for b in sunflower_field(N_1,B,H,D,r_b,tilt,orientation)]
+            elif pattern == "circular":
+                boreholes = [[b] for b in circular_field(N_1, B, H, D, r_b, tilt, orientation)]
+            elif pattern == "polygonal":
+                boreholes = [[b] for b in polygonal_field(N_1,B,N_2,H,D,r_b,tilt,orientation)]
             else: 
                 raise ValueError(
                     f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
@@ -1352,13 +1372,13 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
             row: dict = dict(zip(param_names, combo))
             try:
                 if pattern == "rectangular":
-                    boreholes = rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                    boreholes = [[b] for b in rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)]
                 elif pattern == "sunflower":
-                    boreholes = sunflower_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                    boreholes = [[b] for b in sunflower_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)]
                 elif pattern == "circular":
-                    boreholes = circular_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                    boreholes = [[b] for b in circular_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)]
                 elif pattern == "polygonal":
-                    boreholes = polygonal_field(c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation)
+                    boreholes = [[b] for b in polygonal_field(c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation)]
                 else: 
                     raise ValueError(
                         f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
