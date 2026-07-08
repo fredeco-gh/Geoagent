@@ -661,3 +661,138 @@ function render_reservoir_image(var::AbstractString, step::Int; delta::Bool=fals
         return ""
     end
 end
+
+# ── Fimbul validation (prescribed T_in from pygfunction) ──────────────────────
+
+"""
+    run_btes_validation(setup) -> Dict{String,Any}
+
+Run a Fimbul BTES simulation with a prescribed per-period injection temperature
+timeseries (T_in) derived from a prior pygfunction run. Returns T_out and
+extracted heat energy per period.
+
+Expected keys in `setup`:
+- `"num_boreholes"`, `"num_sectors"` — borehole field layout
+- `"H"`, `"B"` — active depth [m] and well spacing [m]
+- `"k_s"` — ground thermal conductivity [W/(m·K)]
+- `"T_surface_C"` — mean annual surface temperature [°C]
+- `"G"` — geothermal gradient [K/m]
+- `"m_flow_per_borehole"` — mass flow rate per sector [kg/s]
+- `"T_in_C"` — prescribed injection temperatures, one per period [°C]
+- `"durations_s"` — duration of each period [s]
+"""
+function run_btes_validation(setup::AbstractDict)
+    try
+        f64(k)      = Float64(setup[k])
+        num_wells   = round(Int, setup["num_boreholes"])
+        num_sectors = round(Int, setup["num_sectors"])
+        H, B, k_s   = f64("H"), f64("B"), f64("k_s")
+        T_surf_C, G = f64("T_surface_C"), f64("G")
+        m_flow, rho_f, cp_f = f64("m_flow_per_borehole"), f64("rho_fluid"), f64("cp_fluid")
+        T_in_C      = Float64.(setup["T_in_C"])
+        durations_s = Float64.(setup["durations_s"])
+        n_periods   = length(T_in_C)
+        @assert length(durations_s) == n_periods "T_in_C and durations_s must have equal length"
+
+        T_surf_K    = convert_to_si(T_surf_C, :Celsius)
+        G_SI        = G * Kelvin/meter
+        rate_SI     = m_flow / rho_f
+        T_in_mean_K = convert_to_si(sum(T_in_C) / n_periods, :Celsius)
+        depths      = [0.0, 0.5, H, H + 15.0]
+
+        _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, H=$(H) m, B=$(B) m...")
+
+        # Call btes() with a 1-year dummy schedule purely to obtain the model,
+        # state0, and sectors dict. The schedule is discarded immediately.
+        dummy = btes(
+            num_wells             = num_wells,
+            num_sectors           = num_sectors,
+            well_spacing          = B,
+            depths                = depths,
+            thermal_conductivity  = [0.034, k_s, k_s] .* watt/meter/Kelvin,
+            geothermal_gradient   = G_SI,
+            temperature_charge    = T_in_mean_K,
+            temperature_discharge = T_in_mean_K,
+            rate_charge           = rate_SI,
+            temperature_surface   = T_surf_K,
+            num_years             = 1,
+        )
+        model, state0, sectors = dummy.model, dummy.state0, dummy.input_data[:sectors]
+
+        # Reconstruct boundary conditions matching btes.jl: top + sides, not bottom
+        bc, _, _ = Fimbul.set_dirichlet_bcs(
+            model, [:top, :sides];
+            temperature_surface = T_surf_K,
+            geothermal_gradient = G_SI,
+            output_state        = false,
+        )
+
+        rho      = reservoir_model(model).system.rho_ref[1]
+        rate_tgt = TotalRateTarget(rate_SI)
+        bhp_tgt  = BottomHolePressureTarget(1.0si_unit(:atm))
+        is_sup(w) = endswith(String(w), "_supply")
+        is_ret(w) = endswith(String(w), "_return")
+
+        # Build one force set per period — only injection temperature varies
+        forces_list = Any[]
+        for T_C in T_in_C
+            T_K  = convert_to_si(T_C, :Celsius)
+            ctrl = Dict()
+            for (_, sec_wells) in pairs(sectors)
+                supply = filter(is_sup, collect(sec_wells))
+                retrn  = filter(is_ret, collect(sec_wells))
+                for (k, w_sup) in enumerate(supply)
+                    ctrl[w_sup] = k == 1 ?
+                        InjectorControl(rate_tgt, [1.0], density=rho, temperature=T_K) :
+                        InjectorControl(JutulDarcy.ReinjectionTarget([retrn[k-1]]), [1.0],
+                            density=rho, temperature=NaN; check=false)
+                    ctrl[retrn[k]] = ProducerControl(bhp_tgt)
+                end
+            end
+            push!(forces_list, setup_reservoir_forces(model, control=ctrl, bc=bc))
+        end
+
+        # One report per period so results index 1-to-1 with T_in_C
+        dt_vec, forces_vec, _ = make_schedule(forces_list, durations_s; num_reports=1)
+
+        _sim_log_push!("Schedule: $n_periods periods, $(round(sum(durations_s)/86400; digits=1)) days total.")
+        _sim_log_push!("Starting Fimbul validation simulation...")
+
+        results = simulate_reservoir(JutulCase(model, dt_vec, forces_vec, state0=state0))
+
+        _sim_log_push!("Simulation done. Extracting results...")
+
+        # T_out = outlet of the last return well in each sector, averaged across sectors.
+        # sectors[:Sk] = [supply_1, return_1, ..., supply_n, return_n], so [end] is the sector outlet.
+        T_out_K = sum(
+            collect(Float64, results.wells[filter(is_ret, collect(sw))[end]][:Temperature])
+            for (_, sw) in pairs(sectors)
+        ) ./ length(sectors)
+        T_out_C = convert_from_si.(T_out_K, :Celsius)
+
+        # Extracted energy per period [kWh] = N_sectors · ṁ · cp · ΔT · Δt
+        energy_kWh = [
+            num_sectors * m_flow * cp_f * (T_out_C[i] - T_in_C[i]) * durations_s[i] / 3.6e6
+            for i in 1:n_periods
+        ]
+
+        total_kWh = sum(energy_kWh)
+        _sim_log_push!("Total extracted energy: $(round(total_kWh; digits=1)) kWh.")
+
+        return Dict{String,Any}(
+            "status"           => "completed",
+            "T_in_C"           => collect(T_in_C),
+            "T_out_C"          => collect(T_out_C),
+            "energy_kWh"       => collect(energy_kWh),
+            "durations_s"      => collect(durations_s),
+            "total_energy_kWh" => total_kWh,
+            "n_periods"        => n_periods,
+        )
+    catch e
+        _sim_log_push!("ERROR: $(sprint(showerror, e))")
+        return Dict{String,Any}(
+            "status"  => "error",
+            "message" => "Validation failed: $(sprint(showerror, e))",
+        )
+    end
+end

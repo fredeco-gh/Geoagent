@@ -92,6 +92,35 @@ _session_borehole_results: dict[str, dict] = {}
 # plot tabs accumulate instead of overwriting each other.
 _borehole_sim_run_count: dict[str, int] = {}
 
+# Last successful Fimbul validation result per session — consumed by the
+# view_fimbul_validation plot tool without re-running the simulation.
+_session_fimbul_validation_results: dict[str, dict] = {}
+
+
+def _aggregate_tin_profile(
+    T_in: list[float],
+    window_hours: int = 24,
+) -> tuple[list[float], list[float]]:
+    """Average hourly T_in into fixed-width windows.
+
+    The last window may be shorter than window_hours if len(T_in) is not
+    divisible by window_hours.
+
+    Returns:
+        T_in_avg:    mean T_in per window [°C]
+        durations_s: window duration [s]
+    """
+    n = len(T_in)
+    T_in_avg, durations_s = [], []
+    i = 0
+    while i < n:
+        end = min(i + window_hours, n)
+        chunk = T_in[i:end]
+        T_in_avg.append(sum(chunk) / len(chunk))
+        durations_s.append(float(len(chunk) * 3600))
+        i = end
+    return T_in_avg, durations_s
+
 
 def _load_well_features(data_path: str) -> list[dict[str, Any]]:
     cached = _wells_cache.get(data_path)
@@ -380,6 +409,21 @@ begin
     import JSON3
     local _props = Dict{String,Any}(JSON3.read(raw"""__PROPS_JSON__""", Dict{String,Any}))
     local _result = well_to_simulation_params(_props)
+    open(raw"__RESULT_PATH__", "w") do io
+        JSON3.write(io, _result)
+    end
+    "ok"
+end
+'''
+
+_BTES_VALIDATION_TEMPLATE = '''
+begin
+    if !isdefined(Main, :run_btes_validation)
+        include(raw"__JL_PATH__")
+    end
+    import JSON3
+    local _setup = JSON3.read(raw"""__SETUP_JSON__""", Dict{String,Any})
+    local _result = run_btes_validation(_setup)
     open(raw"__RESULT_PATH__", "w") do io
         JSON3.write(io, _result)
     end
