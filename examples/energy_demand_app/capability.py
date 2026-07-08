@@ -1604,6 +1604,161 @@ def _make_plot_borehole_gfunction_tool(session: Session):
     return plot_borehole_gfunction
 
 
+def _borehole_temperatures_png(
+    timestamps: list[str], T_in: list[float], T_out: list[float]
+) -> str:
+    """Render T_in / T_out vs time as a PNG and return it base64-encoded."""
+    import base64
+    import io
+    from datetime import datetime
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    times = [datetime.fromisoformat(ts) for ts in timestamps]
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(times, T_in, color="#d62728", linewidth=0.8, label="T_in")
+    ax.plot(times, T_out, color="#1f77b4", linewidth=0.8, label="T_out")
+    ax.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Temperature [°C]")
+    ax.set_title("Borehole fluid temperatures")
+    ax.legend()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120)
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
+def _borehole_gfunction_png(gfunc_time_s: list[float], gfunc_vals: list[float]) -> str:
+    """Render g-function vs ln(t) as a PNG and return it base64-encoded."""
+    import base64
+    import io
+    import math
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    lnt = [math.log(t) for t in gfunc_time_s]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(lnt, gfunc_vals, color="#2ca02c", linewidth=1.5)
+    ax.set_xlabel("ln(t [s])")
+    ax.set_ylabel("g")
+    ax.set_title("G-function")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120)
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
+def _make_view_borehole_temperatures_tool(session: Session):
+    @tool
+    async def view_borehole_temperatures() -> str | list[dict[str, Any]]:
+        """Show a T_in / T_out vs time plot from the most recent borehole simulation.
+
+        Returns an image you can actually see, plus key statistics including
+        monthly averages and freezing-risk hours. Call run_borehole_simulation first.
+        """
+        from datetime import datetime
+
+        result = _session_borehole_results.get(session.session_id)
+        if result is None:
+            return "No borehole simulation results available. Run run_borehole_simulation first."
+
+        T_in: list[float] = result["T_in"]
+        T_out: list[float] = result["T_out"]
+        timestamps: list[str] = result["timestamps"]
+        n = len(T_in)
+
+        hours_below_0 = sum(1 for t in T_in if t < 0.0)
+        hours_below_2 = sum(1 for t in T_in if t < 2.0)
+
+        month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+                       7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+        monthly_in: dict[tuple[int,int], list[float]] = {}
+        monthly_out: dict[tuple[int,int], list[float]] = {}
+        for ts_str, ti, to in zip(timestamps, T_in, T_out):
+            try:
+                dt = datetime.fromisoformat(ts_str)
+                key = (dt.year, dt.month)
+            except ValueError:
+                continue
+            monthly_in.setdefault(key, []).append(ti)
+            monthly_out.setdefault(key, []).append(to)
+        monthly_lines = [
+            f"  {month_names[m]:3s} {y}: {sum(monthly_in[(y,m)])/len(monthly_in[(y,m)]):+.1f} / "
+            f"{sum(monthly_out[(y,m)])/len(monthly_out[(y,m)]):+.1f} °C"
+            for y, m in sorted(monthly_in)
+        ]
+
+        stats = (
+            f"Run #{result['run_no']}, {n} hourly timesteps\n"
+            f"T_in:  min {min(T_in):.2f} °C  max {max(T_in):.2f} °C  mean {sum(T_in)/n:.2f} °C\n"
+            f"T_out: min {min(T_out):.2f} °C  max {max(T_out):.2f} °C  mean {sum(T_out)/n:.2f} °C\n"
+            f"Hours T_in < 0 °C: {hours_below_0} ({100*hours_below_0/n:.1f}%)\n"
+            f"Hours T_in < 2 °C: {hours_below_2} ({100*hours_below_2/n:.1f}%)\n"
+            "Monthly mean T_in / T_out:\n" + "\n".join(monthly_lines)
+        )
+
+        try:
+            b64 = _borehole_temperatures_png(timestamps, T_in, T_out)
+        except Exception as exc:
+            return f"Plot generation failed: {exc}\n\n{stats}"
+
+        return [
+            {"type": "text", "text": stats},
+            {"type": "image", "mime_type": "image/png", "base64": b64},
+        ]
+
+    return view_borehole_temperatures
+
+
+def _make_view_borehole_gfunction_tool(session: Session):
+    @tool
+    async def view_borehole_gfunction() -> str | list[dict[str, Any]]:
+        """Show a g-function vs ln(t) plot from the most recent borehole simulation.
+
+        Returns an image you can actually see, plus key g values. Call
+        run_borehole_simulation first.
+        """
+        result = _session_borehole_results.get(session.session_id)
+        if result is None:
+            return "No borehole simulation results available. Run run_borehole_simulation first."
+
+        import math
+
+        gfunc_time_s: list[float] = result["gfunc_time"]
+        gfunc_vals: list[float] = result["gfunc_vals"]
+        lnt = [math.log(t) for t in gfunc_time_s]
+
+        stats = "\n".join([
+            f"Run #{result['run_no']}, {len(lnt)} data points",
+            f"ln(t) range: {lnt[0]:.2f} to {lnt[-1]:.2f}",
+            f"g range:     {min(gfunc_vals):.3f} to {max(gfunc_vals):.3f}",
+        ])
+
+        try:
+            b64 = _borehole_gfunction_png(gfunc_time_s, gfunc_vals)
+        except Exception as exc:
+            return f"Plot generation failed: {exc}\n\n{stats}"
+
+        return [
+            {"type": "text", "text": stats},
+            {"type": "image", "mime_type": "image/png", "base64": b64},
+        ]
+
+    return view_borehole_gfunction
+
+
 _PROMPT_FRAGMENT = (
     "This app shows a map of Norwegian borehole data next to the chat (it "
     "appears the first time you use one of the tools below). Call "
@@ -1625,10 +1780,12 @@ _PROMPT_FRAGMENT = (
     "Call `run_borehole_simulation` to run a single pygfunction borehole heat "
     "exchanger simulation on the heating demands most recently generated via the "
     "'Generate energy demands' button. Use this for a single configuration. "
-    "After a successful simulation, call `plot_borehole_temperatures` to open a "
-    "T_in/T_out vs time chart in its own canvas tab, or `plot_borehole_gfunction` "
-    "to open a g-function vs ln(t) chart — only when the user explicitly asks to "
-    "see a plot.\n\n"
+    "After a successful simulation, call `view_borehole_temperatures` to see "
+    "a T_in/T_out vs time plot (returns an image you can read and describe, "
+    "plus monthly averages and freezing-risk statistics), or "
+    "`view_borehole_gfunction` to see a g-function vs ln(t) plot. "
+    "Use `plot_borehole_temperatures` or `plot_borehole_gfunction` only when "
+    "the user explicitly asks to open a chart in the canvas tab.\n\n"
     "Call `sweep_borehole_parameters` only when the user explicitly asks to "
     "explore or optimise over multiple borehole configurations at once (e.g. "
     "varying depth, number of boreholes, or ground properties). Each parameter "
@@ -1666,6 +1823,8 @@ def geothermal_map_capability(
             _make_sweep_borehole_parameters_tool,
             _make_plot_borehole_temperatures_tool,
             _make_plot_borehole_gfunction_tool,
+            _make_view_borehole_temperatures_tool,
+            _make_view_borehole_gfunction_tool,
         ),
         prompt_fragment=_PROMPT_FRAGMENT,
         surfaces=("web",),
