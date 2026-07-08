@@ -1802,6 +1802,49 @@ def _make_view_borehole_gfunction_tool(session: Session):
 
     return view_borehole_gfunction
 
+
+def _fimbul_validation_png(
+    T_in_C: list[float],
+    T_out_C: list[float],
+    durations_s: list[float],
+    energy_kWh: list[float],
+    demand_kWh_windowed: list[float],
+) -> str:
+    """Two-panel PNG: (top) T_in/T_out vs cumulative days, (bottom) Fimbul extraction vs demand."""
+    import base64
+    import io
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    days = [sum(durations_s[:i]) / 86400 for i in range(len(durations_s))]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+
+    ax1.plot(days, T_in_C,  color="#d62728", linewidth=0.8, label="T_in (prescribed)")
+    ax1.plot(days, T_out_C, color="#1f77b4", linewidth=0.8, label="T_out (Fimbul)")
+    ax1.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
+    ax1.set_ylabel("Temperature [°C]")
+    ax1.set_title("Fimbul validation: prescribed T_in vs computed T_out")
+    ax1.legend()
+
+    ax2.plot(days, demand_kWh_windowed, color="#e67e22", linewidth=0.8, label="Heating demand")
+    ax2.plot(days, energy_kWh,          color="#27ae60", linewidth=0.8, label="Fimbul extraction")
+    ax2.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
+    ax2.set_xlabel("Day of year")
+    ax2.set_ylabel("Energy [kWh]")
+    ax2.set_title("Fimbul extraction vs heating demand (windowed)")
+    ax2.legend()
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120)
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
 def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
     @tool
     async def run_fimbul_validation(  # noqa: PLR0913
@@ -1977,6 +2020,93 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
     return run_fimbul_validation
 
 
+def _make_view_fimbul_validation_tool(session: Session):
+    @tool
+    async def view_fimbul_validation() -> str | list[dict[str, Any]]:
+        """Open a canvas plot and show the image and statistics from the most recent Fimbul validation.
+
+        Opens a canvas tab with (1) prescribed T_in vs Fimbul-computed T_out and
+        (2) Fimbul heat extraction vs windowed heating demand. Also returns the
+        image and key statistics (total extraction, total demand, temperature
+        ranges) directly so they are visible here in the chat.
+        Call run_fimbul_validation first.
+        """
+        from backend_building_selection import get_session_demand_data
+
+        result = _session_fimbul_validation_results.get(session.session_id)
+        if result is None:
+            return "No Fimbul validation result found. Run run_fimbul_validation first."
+
+        T_in_C      = result["T_in_C"]
+        T_out_C     = result["T_out_C"]
+        energy_kWh  = result["energy_kWh"]
+        durations_s = result["durations_s"]
+        n           = result["n_periods"]
+        wh          = result["window_hours"]
+
+        # Aggregate raw demand (kW, hourly) over the same windows used by Fimbul.
+        demand = get_session_demand_data(session.session_id)
+        if demand is not None:
+            raw_kw: list[float] = demand["demand_kw"]
+            demand_kWh_windowed: list[float] = []
+            i = 0
+            for dur in durations_s:
+                w = round(dur / 3600)
+                chunk = raw_kw[i : i + w]
+                demand_kWh_windowed.append(float(sum(chunk)))
+                i += len(chunk)
+        else:
+            demand_kWh_windowed = [0.0] * n
+
+        try:
+            b64 = _fimbul_validation_png(
+                T_in_C, T_out_C, durations_s, energy_kWh, demand_kWh_windowed
+            )
+        except Exception as exc:
+            return f"Plot generation failed: {exc}"
+
+        html = (
+            "<!doctype html><html><head><title>Fimbul validation</title>"
+            "<style>body{margin:0;background:#fff}img{max-width:100%;display:block}</style>"
+            "</head><body>"
+            f'<img src="data:image/png;base64,{b64}">'
+            "</body></html>"
+        )
+        rel = "artifacts/fimbul-validation.html"
+        out = session.output_dir / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html, encoding="utf-8")
+        session.trace.append(
+            "artifact",
+            {
+                "path": rel,
+                "mime": "text/html",
+                "format": "html",
+                "caption": "Fimbul validation",
+                "kind": "report",
+                "slot": "fimbul-validation",
+            },
+        )
+
+        stats = (
+            f"{n} windows of {wh} h\n"
+            f"T_in:  min {min(T_in_C):.2f} °C  max {max(T_in_C):.2f} °C  "
+            f"mean {sum(T_in_C)/n:.2f} °C\n"
+            f"T_out: min {min(T_out_C):.2f} °C  max {max(T_out_C):.2f} °C  "
+            f"mean {sum(T_out_C)/n:.2f} °C\n"
+            f"Total extracted energy: {sum(energy_kWh):.0f} kWh\n"
+            f"Total heating demand:   {sum(demand_kWh_windowed):.0f} kWh\n"
+            f"Periods with negative extraction: {sum(1 for e in energy_kWh if e < 0)}"
+        )
+        return [
+            {"type": "text", "text": stats},
+            {"type": "image", "mime_type": "image/png", "base64": b64},
+        ]
+
+    return view_fimbul_validation
+
+
+
 _PROMPT_FRAGMENT = (
     "This app shows a map of Norwegian borehole data next to the chat (it "
     "appears the first time you use one of the tools below). Call "
@@ -2020,7 +2150,11 @@ _PROMPT_FRAGMENT = (
     "injection temperature, and returns T_out and net extracted energy per "
     "window. Pass exactly the same parameters as the `run_borehole_simulation` "
     "call being validated (N_1, N_2, B, H, D, r_b, k_s, G, pattern, etc.) so "
-    "the comparison is faithful. "
+    "the comparison is faithful. Call `view_fimbul_validation` afterwards — it "
+    "opens a two-panel canvas plot (T_in/T_out temperatures and Fimbul "
+    "extraction vs heating demand) and returns both the plot image and summary "
+    "statistics as text, so you can see and reason about the results directly."
+
 )
 
 
@@ -2052,7 +2186,7 @@ def geothermal_map_capability(
             _make_view_borehole_temperatures_tool,
             _make_view_borehole_gfunction_tool,
             lambda session: _make_run_fimbul_validation_tool(session, simulation_jl_path),
-            
+            _make_view_fimbul_validation_tool,
         ),
         prompt_fragment=_PROMPT_FRAGMENT,
         surfaces=("web",),
