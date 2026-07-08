@@ -12,15 +12,19 @@ DemandType = Literal["DHW", "Space heating", "Total thermal heating"]
 def get_energy_demand_timeseries(
     df_temperature: pd.DataFrame,
     selected_year: int,
-    building_type_code: int,
-    usable_floor_area_m2: float | None,
+    building_type_code: int | None = None,
+    usable_floor_area_m2: float | None = None,
     efficiency_key: str = "Reg",
     demand_type: DemandType = "Total thermal heating",
+    building_category: str | None = None,
 ) -> pd.DataFrame:
     """Return an hourly energy demand time series for the given building and year.
 
     Tries to obtain the result from the PROFet API. Falls back to a synthetic
     time series if the API call fails (e.g. no API key configured yet).
+
+    Supply either ``building_type_code`` (Matrikkel code, normal WFS path) or
+    ``building_category`` (PROFet category string, fallback when WFS is down).
 
     Args:
         df_temperature: DataFrame with columns 'time' and 'temperature_C'.
@@ -30,15 +34,32 @@ def get_energy_demand_timeseries(
         efficiency_key: Energy efficiency level ("Reg", "Eff-E", "Eff-N", "Vef").
         demand_type: Which demand component to return — "DHW", "Space heating",
             or "Total thermal heating".
+        building_category: PROFet category (e.g. "House", "Office"). Used when
+            building_type_code is None (WFS unavailable).
 
     Returns:
         DataFrame with columns 'time' and the demand in kW, one row per hour.
     """
+    from PROFet_API import (
+        TYPICAL_AREAS_M2,
+        map_matrikkel_building_type_to_profet_category,
+    )
+
+    if building_type_code is not None:
+        category = map_matrikkel_building_type_to_profet_category(building_type_code)
+    elif building_category:
+        category = building_category
+    else:
+        raise ValueError("Either building_type_code or building_category must be provided.")
+
+    if usable_floor_area_m2 is None:
+        usable_floor_area_m2 = TYPICAL_AREAS_M2[category]
+
     try:
         result = run_profet_for_building(
             df_temperature=df_temperature,
             selected_year=selected_year,
-            building_type_code=building_type_code,
+            building_category=category,
             usable_floor_area_m2=usable_floor_area_m2,
             efficiency_key=efficiency_key,
         )
@@ -48,7 +69,7 @@ def get_energy_demand_timeseries(
         return _make_synthetic_timeseries(
             df_temperature=df_temperature,
             demand_type=demand_type,
-            building_type_code=building_type_code,
+            building_category=category,
             efficiency_key=efficiency_key,
             usable_floor_area_m2=usable_floor_area_m2,
         )
@@ -94,44 +115,20 @@ EFFICIENCY_PEAK_MULTIPLIER = {
 def make_synthetic_space_heating_timeseries(
     df_temperature: pd.DataFrame,
     usable_floor_area_m2: float,
-    building_type_code: int,
+    building_category: str,
     efficiency_key: str = "Reg",
 ) -> pd.DataFrame:
-    """
-    Generate a synthetic space heating demand profile for a building.
-
-    A positive value means heating is required:
-        Q_space_heating_kW > 0
-
-    The model is:
-        Q_space = Q_peak * max(0, T_balance - T_out) / (T_balance - T_low)
-
-        with T_balance = 15 °C and T_low = -20 °C.
+    """Generate a synthetic space heating demand profile for a building.
 
     Args:
-        df_temperature:
-            DataFrame with columns 'time' and 'temperature_C'.
-        usable_floor_area_m2:
-            Heated floor area / BRA [m²]. If None, a typical value is looked
-            up based on building_type_code.
-        building_type_code:
-            Matrikkel building type code, used to determine the PROFet category
-            and (if usable_floor_area_m2 is None) a typical floor area.
-        efficiency_key:
-            Energy efficiency level ("Reg", "Eff-E", "Eff-N", "Vef").
+        df_temperature: DataFrame with columns 'time' and 'temperature_C'.
+        usable_floor_area_m2: Heated floor area / BRA [m²].
+        building_category: PROFet building category (e.g. "House", "Office").
+        efficiency_key: Energy efficiency level ("Reg", "Eff-E", "Eff-N", "Vef").
 
     Returns:
-        DataFrame with columns:
-            time
-            space_heating_kW
+        DataFrame with columns 'time' and 'space_heating_kW'.
     """
-
-    from PROFet_API import usable_floor_area_m2_and_building_category
-
-    usable_floor_area_m2, building_category = usable_floor_area_m2_and_building_category(
-        usable_floor_area_m2, building_type_code
-    )
-
     specific_peak_W_m2 = (
         SPECIFIC_PEAK_W_M2_REGULAR[building_category] * EFFICIENCY_PEAK_MULTIPLIER[efficiency_key]
     )
@@ -141,17 +138,10 @@ def make_synthetic_space_heating_timeseries(
     df = df.sort_values("time").reset_index(drop=True)
 
     Q_peak_space_kW = usable_floor_area_m2 * specific_peak_W_m2 / 1000.0
-
     heating_fraction = ((15 - df["temperature_C"]) / 35).clip(lower=0)
-
     df["space_heating_kW"] = Q_peak_space_kW * heating_fraction
 
-    return df[
-        [
-            "time",
-            "space_heating_kW",
-        ]
-    ]
+    return df[["time", "space_heating_kW"]]
 
 
 DHW_ANNUAL_KWH_DEFAULT = {
@@ -172,93 +162,64 @@ DHW_ANNUAL_KWH_DEFAULT = {
 
 def make_synthetic_dhw_timeseries(
     time: pd.Series,
-    building_type_code: int,
+    building_category: str,
 ) -> pd.DataFrame:
-    """
-    Generate a synthetic domestic hot water (DHW) demand profile [kW].
-
-    The daily shape consists of a small base load, a morning peak around 07:00,
-    and a slightly larger evening peak around 19:00. The shape is normalised so
-    that the total energy over the time series equals dhw_annual_kWh, looked up
-    from DHW_ANNUAL_KWH_DEFAULT based on the building type code.
+    """Generate a synthetic domestic hot water (DHW) demand profile [kW].
 
     Args:
-        time:
-            Series of hourly timestamps covering the period to model.
-        building_type_code:
-            Matrikkel building type code, used to look up the PROFet category
-            and the corresponding default annual DHW energy [kWh].
+        time: Series of hourly timestamps covering the period to model.
+        building_category: PROFet building category (e.g. "House", "Office").
 
     Returns:
-        DataFrame with columns:
-            time
-            dhw_kW
+        DataFrame with columns 'time' and 'dhw_kW'.
     """
-
-    from PROFet_API import usable_floor_area_m2_and_building_category
-
-    _, building_category = usable_floor_area_m2_and_building_category(None, building_type_code)
-
     dhw_annual_kWh = DHW_ANNUAL_KWH_DEFAULT[building_category]
 
     time = pd.to_datetime(time)
     n_hours = len(time)
-
     hour_of_day = time.dt.hour.to_numpy(dtype=float)
 
     morning_peak = np.exp(-0.5 * ((hour_of_day - 7.0) / 1.5) ** 2)
-
     evening_peak = 1.1 * np.exp(-0.5 * ((hour_of_day - 19.0) / 2.0) ** 2)
-
     shape = 0.1 + morning_peak + evening_peak
-
-    # Normalise so that the mean of shape equals 1,
-    # making sum(dhw_kW) equal to dhw_annual_kWh at hourly resolution.
     shape = shape / shape.mean()
 
     dhw_average_kW = dhw_annual_kWh / n_hours
 
-    dhw_kW = dhw_average_kW * shape
-
-    return pd.DataFrame(
-        {
-            "time": time,
-            "dhw_kW": dhw_kW,
-        }
-    )
+    return pd.DataFrame({"time": time, "dhw_kW": dhw_average_kW * shape})
 
 
 def _make_synthetic_timeseries(
     df_temperature: pd.DataFrame,
     demand_type: DemandType,
-    building_type_code: int,
+    building_category: str,
     efficiency_key: str,
-    usable_floor_area_m2: float | None,
+    usable_floor_area_m2: float,
 ) -> pd.DataFrame:
     """Synthetic hourly energy demand DataFrame; fallback when PROFet is unavailable."""
     if demand_type == "DHW":
         return make_synthetic_dhw_timeseries(
             time=df_temperature["time"],
-            building_type_code=building_type_code,
+            building_category=building_category,
         )
 
     if demand_type == "Space heating":
         return make_synthetic_space_heating_timeseries(
             df_temperature=df_temperature,
             usable_floor_area_m2=usable_floor_area_m2,
-            building_type_code=building_type_code,
+            building_category=building_category,
             efficiency_key=efficiency_key,
         )
 
     if demand_type == "Total thermal heating":
         df_dhw = make_synthetic_dhw_timeseries(
             time=df_temperature["time"],
-            building_type_code=building_type_code,
+            building_category=building_category,
         )
         df_sh = make_synthetic_space_heating_timeseries(
             df_temperature=df_temperature,
             usable_floor_area_m2=usable_floor_area_m2,
-            building_type_code=building_type_code,
+            building_category=building_category,
             efficiency_key=efficiency_key,
         )
         return pd.DataFrame(

@@ -330,8 +330,8 @@ def run_profet(payload: dict[str, Any], token: str | None = token) -> dict[str, 
 def run_profet_for_building(
     df_temperature: pd.DataFrame,
     selected_year: int,
-    building_type_code: int,
-    usable_floor_area_m2: float | None,
+    building_category: str,
+    usable_floor_area_m2: float,
     efficiency_key: str = "Reg",
     token: str | None = token,
 ) -> dict[str, Any]:
@@ -342,10 +342,6 @@ def run_profet_for_building(
       3. run PROFet
       4. return raw JSON response
     """
-
-    usable_floor_area_m2, building_category = usable_floor_area_m2_and_building_category(
-        usable_floor_area_m2, building_type_code
-    )
 
     payload = build_profet_v2_payload(
         df_temperature=df_temperature,

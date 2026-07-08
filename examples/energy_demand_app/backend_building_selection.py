@@ -659,6 +659,7 @@ def make_generate_energy_demands_action():
         year = int(args.get("year", 2023))
         bygningsnummer = str(args.get("bygningsnummer", "?"))
         bygningstype_kode = args.get("bygningstype_kode")
+        building_category = str(args.get("building_category") or "") or None
         raw_area = args.get("usable_floor_area_m2")
         usable_floor_area_m2 = float(raw_area) if raw_area is not None else None
         efficiency_key = str(args.get("efficiency_key") or "Reg")
@@ -688,7 +689,7 @@ def make_generate_energy_demands_action():
                 None, lambda: fetch_building_year_temperature(lat=lat, lon=lon, year=year)
             )
 
-            if bygningstype_kode is None:
+            if bygningstype_kode is None and not building_category:
                 raise ValueError("Building type code missing — click a building on the map first.")
 
             df_demand = await asyncio.get_event_loop().run_in_executor(
@@ -696,10 +697,11 @@ def make_generate_energy_demands_action():
                 lambda: get_energy_demand_timeseries(
                     df_temperature=df_temp,
                     selected_year=year,
-                    building_type_code=int(bygningstype_kode),
+                    building_type_code=int(bygningstype_kode) if bygningstype_kode is not None else None,
                     usable_floor_area_m2=usable_floor_area_m2,
                     efficiency_key=efficiency_key,
                     demand_type=demand_type,
+                    building_category=building_category,
                 ),
             )
 

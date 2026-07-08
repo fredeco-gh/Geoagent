@@ -341,6 +341,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
   const [energyPanelOpen, setEnergyPanelOpen] = useState(false);
   const [energyYear, setEnergyYear] = useState(2023);
   const [energyFloorArea, setEnergyFloorArea] = useState<number | "">("");
+  const [energyBuildingCategory, setEnergyBuildingCategory] = useState("House");
   const [energyEfficiencyKey, setEnergyEfficiencyKey] = useState("Reg");
   const [energyDemandType, setEnergyDemandType] = useState<
     "DHW" | "Space heating" | "Total thermal heating"
@@ -988,6 +989,32 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               />
             </div>
           </div>
+          {!selectedBuilding?.bygningstype_kode && (
+            <div className="sim-param-row">
+              <label htmlFor="energy-building-category">Building type</label>
+              <div className="sim-param-input-wrap">
+                <select
+                  id="energy-building-category"
+                  className="sim-param-input"
+                  value={energyBuildingCategory}
+                  onChange={(e) => setEnergyBuildingCategory(e.target.value)}
+                >
+                  <option value="House">House</option>
+                  <option value="Apartment">Apartment</option>
+                  <option value="Office">Office</option>
+                  <option value="Shop">Shop</option>
+                  <option value="Hotel">Hotel</option>
+                  <option value="School">School</option>
+                  <option value="University">University</option>
+                  <option value="Kindergarten">Kindergarten</option>
+                  <option value="Hospital">Hospital</option>
+                  <option value="Nursing_home">Nursing home</option>
+                  <option value="Culture_Sport">Culture / Sport</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+            </div>
+          )}
           <div className="sim-param-row">
             <label htmlFor="energy-floor-area">Usable floor area (m²)</label>
             <div className="sim-param-input-wrap">
@@ -1053,6 +1080,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                   year: energyYear,
                   bygningsnummer: selectedBuilding.bygningsnummer,
                   bygningstype_kode: selectedBuilding.bygningstype_kode ?? null,
+                  building_category: selectedBuilding.bygningstype_kode ? null : energyBuildingCategory,
                   usable_floor_area_m2: energyFloorArea !== "" ? energyFloorArea : null,
                   efficiency_key: energyEfficiencyKey,
                   demand_type: energyDemandType,
