@@ -482,6 +482,28 @@ def compute_field_undisturbed_ground_temperature(
     return weighted / total_H
 
 
+def boreholes_to_fimbul_field(
+    boreholes: list[list[BoreholeParams]],
+) -> list[list[list[list[float]]]]:
+    """Convert a nested list of BoreholeParams to Fimbul's field structure.
+
+    Returns list[sector][well] = [[x_top, y_top, z_top], [x_bot, y_bot, z_bot]],
+    where the top point is (b.x, b.y, b.D) and the bottom point is displaced
+    by H along the borehole axis defined by tilt and orientation.
+    """
+    import math
+    field = []
+    for sector in boreholes:
+        sector_wells = []
+        for b in sector:
+            x_bot = b.x + b.H * math.sin(b.tilt) * math.cos(b.orientation)
+            y_bot = b.y + b.H * math.sin(b.tilt) * math.sin(b.orientation)
+            z_bot = b.D + b.H * math.cos(b.tilt)
+            sector_wells.append([[b.x, b.y, b.D], [x_bot, y_bot, z_bot]])
+        field.append(sector_wells)
+    return field
+
+
 def simulate_borehole_temperatures(
     df_demand: pd.DataFrame,
     lat: float | None = None,

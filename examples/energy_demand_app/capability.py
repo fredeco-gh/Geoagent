@@ -122,6 +122,31 @@ def _aggregate_tin_profile(
     return T_in_avg, durations_s
 
 
+def _apply_overrides(boreholes, overrides):
+    """Apply per-borehole overrides to a generated field.
+
+    overrides: {sector_str: {well_str: {param: value, ...}}}
+    dx/dy are added to the borehole's existing x/y; all other keys replace.
+    Returns a new nested list; the originals are not mutated.
+    """
+    if not overrides:
+        return boreholes
+    import dataclasses
+    boreholes = [list(sector) for sector in boreholes]
+    for s_str, wells in overrides.items():
+        s = int(s_str)
+        for w_str, changes in wells.items():
+            w = int(w_str)
+            b = boreholes[s][w]
+            ch = {k: float(v) for k, v in changes.items() if k not in ("dx", "dy")}
+            if "dx" in changes:
+                ch["x"] = b.x + float(changes["dx"])
+            if "dy" in changes:
+                ch["y"] = b.y + float(changes["dy"])
+            boreholes[s][w] = dataclasses.replace(b, **ch)
+    return boreholes
+
+
 def _load_well_features(data_path: str) -> list[dict[str, Any]]:
     cached = _wells_cache.get(data_path)
     if cached is not None:
@@ -1183,6 +1208,7 @@ def _make_run_borehole_simulation_tool(session: Session):
         G: float = 0.03,
         pattern: str = "rectangular",
         num_sectors: int | None = None,
+        overrides: dict[str, dict[str, dict]] | None = None,
     ) -> str:
         """Run a pygfunction borehole heat exchanger simulation using the heating
         demands most recently generated for the current building.
@@ -1220,6 +1246,22 @@ def _make_run_borehole_simulation_tool(session: Session):
             num_sectors: Number of hydraulic sectors. Boreholes within a sector are
             connected in series; sectors are connected in parallel. Defaults to the
             total number of boreholes (one borehole per sector = fully parallel field).
+            overrides: Optional per-borehole parameter changes applied after the
+            field is generated from the pattern. Structure:
+            {"sector_index": {"well_index": {param: value, ...}, ...}, ...}
+            where sector_index and well_index are 0-based string integers. Within
+            each borehole dict the following keys are recognised:
+              H (float): active borehole depth [m].
+              D (float): buried depth to top of active section [m].
+              r_b (float): borehole radius [m].
+              tilt (float): tilt from vertical [radians].
+              orientation (float): azimuthal direction of tilt [radians].
+              dx (float): displacement added to the pattern x-coordinate [m].
+              dy (float): displacement added to the pattern y-coordinate [m].
+            dx/dy shift a borehole relative to its pattern-generated position;
+            all other keys replace the uniform value directly.
+            Example — deepen well 1 in sector 0 and shift well 2 by (2, 3) m:
+            {"0": {"1": {"H": 250.0}, "2": {"dx": 2.0, "dy": 3.0}}}
         """
         import pandas as pd
 
@@ -1256,7 +1298,8 @@ def _make_run_borehole_simulation_tool(session: Session):
                 raise ValueError(
                     f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
                 )
-            
+            boreholes = _apply_overrides(boreholes, overrides)
+
             df_result, gfunc_time, gfunc_vals = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: simulate_borehole_temperatures(
@@ -1881,6 +1924,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         pattern: str = "rectangular",
         num_sectors: int | None = None,
         window_hours: int = 24,
+        overrides: dict[str, dict[str, dict]] | None = None,
     ) -> str:
         """Validate a pygfunction borehole geometry with a Fimbul PDE simulation.
 
@@ -1890,7 +1934,9 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         temperature. Returns T_out and net extracted heat energy per window.
 
         All parameters must match the run_borehole_simulation call being validated
-        to ensure a faithful comparison. Use view_fimbul_validation to plot.
+        to ensure a faithful comparison. The same overrides are applied to both the
+        pygfunction run and the Fimbul field, keeping both sides in sync.
+        Use view_fimbul_validation to plot.
 
         Args:
             N_1: Number of boreholes in x (rectangular) or total boreholes. Default 1.
@@ -1917,6 +1963,22 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
                 connected in series; sectors are connected in parallel. Defaults to the
                 total number of boreholes (one borehole per sector = fully parallel field).
             window_hours: Averaging window width in hours. Default 24 (daily).
+            overrides: Optional per-borehole parameter changes applied after the
+            field is generated from the pattern. Structure:
+            {"sector_index": {"well_index": {param: value, ...}, ...}, ...}
+            where sector_index and well_index are 0-based string integers. Within
+            each borehole dict the following keys are recognised:
+              H (float): active borehole depth [m].
+              D (float): buried depth to top of active section [m].
+              r_b (float): borehole radius [m].
+              tilt (float): tilt from vertical [radians].
+              orientation (float): azimuthal direction of tilt [radians].
+              dx (float): displacement added to the pattern x-coordinate [m].
+              dy (float): displacement added to the pattern y-coordinate [m].
+            dx/dy shift a borehole relative to its pattern-generated position;
+            all other keys replace the uniform value directly.
+            Example — deepen well 1 in sector 0 and shift well 2 by (2, 3) m:
+            {"0": {"1": {"H": 250.0}, "2": {"dx": 2.0, "dy": 3.0}}}
         """
         import asyncio
 
@@ -1928,6 +1990,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             FluidParams,
             GroundParams,
             PipeParams,
+            boreholes_to_fimbul_field,
             circular_field,
             fetch_mean_surface_temperature,
             polygonal_field,
@@ -1951,6 +2014,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             boreholes = polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation, num_sectors)
         else:
             return f"Unknown pattern {pattern!r}."
+        boreholes = _apply_overrides(boreholes, overrides)
 
         try:
             df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
@@ -1974,21 +2038,12 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             df_result["T_in"].tolist(), window_hours=window_hours
         )
 
-        N = N_1 * N_2 if pattern == "rectangular" else N_1
         T_surface = fetch_mean_surface_temperature(demand["lat"], demand["lon"])
         fluid = FluidParams()
         fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
 
         setup = {
-            "num_boreholes":       N,
-            "num_sectors":         num_sectors if num_sectors is not None else N,
-            "pattern":             pattern,
-            "num_sides":           N_2 if pattern == "polygonal" else 6,
-            "H":                   H,
-            "D":                   D,
-            "tilt":                tilt,
-            "orientation":         orientation,
-            "B":                   B,
+            "field": boreholes_to_fimbul_field(boreholes),
             "k_s":                 k_s,
             "alpha":               alpha,
             "G":                   G,

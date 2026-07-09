@@ -683,11 +683,9 @@ Expected keys in `setup`:
 """
 function run_btes_validation(setup::AbstractDict)
     try
-        f64(k)      = Float64(setup[k])
-        num_wells   = round(Int, setup["num_boreholes"])
-        num_sectors = round(Int, setup["num_sectors"])
-        H, B, k_s   = f64("H"), f64("B"), f64("k_s")
-        alpha       = f64("alpha")
+        f64(k) = Float64(setup[k])
+        k_s   = f64("k_s")
+        alpha = f64("alpha")
         T_surf_C, G = f64("T_surface_C"), f64("G")
         m_flow, rho_f, cp_f = f64("m_flow_per_borehole"), f64("rho_fluid"), f64("cp_fluid")
         T_in_C      = Float64.(setup["T_in_C"])
@@ -699,31 +697,27 @@ function run_btes_validation(setup::AbstractDict)
         G_SI        = G * Fimbul.Kelvin/Fimbul.meter
         rate_SI     = m_flow / rho_f
         T_in_mean_K = Fimbul.convert_to_si(sum(T_in_C) / n_periods, :Celsius)
-        D           = f64("D")
-        tilt        = f64("tilt")
-        H_vert      = H * cos(tilt)   # vertical depth of borehole tip [m]
-        depths      = [0.0, D, D + H_vert, D + H_vert + 15.0]
-        # Match Fimbul's effective thermal diffusivity to pygfunction's alpha.
-        # density of rock layers is fixed at [30, 2580, 2580] kg/m³; derive
-        # heat capacity so that alpha = k_s / (rho * cp) holds for the rock layers.
-        rock_density  = 2580.0  # kg/m³
-        rock_cp       = k_s / (alpha * rock_density)  # J/(kg·K)
 
-        pattern_str = setup["pattern"]
-        pattern_sym = Symbol(pattern_str)
-        num_sides   = round(Int, setup["num_sides"])
+        # Parse field: list[sector][well] = [[x_top,y_top,z_top],[x_bot,y_bot,z_bot]]
+        # hcat converts each 2-point list into a 3×2 matrix (rows=x/y/z, cols=top/bottom)
+        field_json  = setup["field"]
+        field       = [[Float64.(hcat(wpts...)) for wpts in sector_pts] for sector_pts in field_json]
+        num_sectors = length(field)
+        num_wells   = sum(length(sector) for sector in field)
+        z_tops      = [wc[3, 1] for sector in field for wc in sector]
+        z_bottoms   = [wc[3, 2] for sector in field for wc in sector]
+        D_min       = minimum(z_tops)
+        max_depth   = maximum(z_bottoms)
+        depths      = [0.0, D_min, max_depth, max_depth + 15.0]
+        rock_density = 2580.0
+        rock_cp      = k_s / (alpha * rock_density)
 
-        _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, pattern=$pattern_str, H=$(H) m, B=$(B) m...")
+        _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, field-based...")
 
         # Call btes() with a 1-year dummy schedule purely to obtain the model,
         # state0, and sectors dict. The schedule is discarded immediately.
         dummy = btes(
-            pattern_sym,
-            num_wells             = num_wells,
-            num_sides             = num_sides,
-            num_sectors           = num_sectors,
-            well_spacing          = B,
-            well_depth            = D + H_vert,   # total depth from surface to borehole tip
+            field;
             depths                = depths,
             density               = [30.0, rock_density, rock_density] .* Fimbul.kilogram/Fimbul.meter^3,
             thermal_conductivity  = [0.034, k_s, k_s] .* Fimbul.watt/Fimbul.meter/Fimbul.Kelvin,
