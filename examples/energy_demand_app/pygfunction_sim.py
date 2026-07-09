@@ -13,7 +13,7 @@ class BoreholeParams:
     """Geometric parameters for a single borehole."""
 
     H: float = 200.0  # active borehole depth [m]
-    D: float = 4.0  # buried depth from surface to top of active section [m]
+    D: float = 0.5  # buried depth from surface to top of active section [m]  (matches Fimbul default)
     r_b: float = 0.065  # borehole radius [m]
     x: float = 0.0  # horizontal position [m]
     y: float = 0.0  # horizontal position [m]
@@ -25,8 +25,8 @@ class BoreholeParams:
 class GroundParams:
     """Ground thermal properties, uniform across the borehole field."""
 
-    k_s: float = 3.0  # thermal conductivity [W/(m K)] — Oslo gneiss/granite
-    alpha: float = 1.33e-6  # thermal diffusivity [m²/s] — k_s / (rho*cp) = 3.0 / (2650*850)
+    k_s: float = 3.7  # thermal conductivity [W/(m K)]  (matches Fimbul default)
+    alpha: float = 1.59e-6  # thermal diffusivity [m²/s]  k_s/(rho*cp) = 3.7/(2580*900)  (matches Fimbul default)
 
 @dataclasses.dataclass
 class PipeParams:
@@ -54,7 +54,7 @@ def rectangle_field(
     N_2: int,
     B: float = 3.0,
     H: float = 200.0,
-    D: float = 4.0,
+    D: float = 0.5,
     r_b: float = 0.065,
     tilt: float = 0.0,
     orientation: float = 0.0,
@@ -79,7 +79,7 @@ def sunflower_field(
     N: int,
     B: float = 3.0,
     H: float = 200.0,
-    D: float = 4.0,
+    D: float = 0.5,
     r_b: float = 0.065,
     tilt: float = 0.0,
     orientation: float = 0.0,
@@ -116,7 +116,7 @@ def circular_field(
     N: int,
     B: float = 3.0,
     H: float = 200.0,
-    D: float = 4.0,
+    D: float = 0.5,
     r_b: float = 0.065,
     tilt: float = 0.0,
     orientation: float = 0.0,
@@ -343,7 +343,7 @@ def polygonal_field(
     B: float = 3.0,
     num_sides: int = 6,
     H: float = 200.0,
-    D: float = 4.0,
+    D: float = 0.5,
     r_b: float = 0.065,
     tilt: float = 0.0,
     orientation: float = 0.0,
@@ -431,7 +431,7 @@ def compute_undisturbed_ground_temperature(
     T_surface: float,
     H: float,
     D: float,
-    G: float = 0.025,
+    G: float = 0.03,
     tilt: float = 0.0,
 ) -> float:
     """Compute the representative undisturbed ground temperature for a single borehole.
@@ -454,7 +454,7 @@ def compute_undisturbed_ground_temperature(
 def compute_field_undisturbed_ground_temperature(
     T_surface: float,
     boreholes: list,
-    G: float = 0.025,
+    G: float = 0.03,
 ) -> float:
     """Compute the length-weighted mean undisturbed ground temperature for a borehole field.
 
@@ -491,7 +491,7 @@ def simulate_borehole_temperatures(
     fluid: FluidParams | None = None,
     ground: GroundParams | None = None,
     COP: float = 3.5,
-    G: float = 0.025,
+    G: float = 0.03,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Compute hourly fluid temperatures in a borehole field from a building thermal demand.
 

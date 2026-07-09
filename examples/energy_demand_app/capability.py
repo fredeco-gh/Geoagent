@@ -1167,21 +1167,22 @@ def _make_run_borehole_simulation_tool(session: Session):
         N_2: int = 1,
         B: float = 5.0,
         H: float = 200.0,
-        D: float = 4.0,
-        r_b: float = 0.070,
+        D: float = 0.5,
+        r_b: float = 0.065,
         tilt: float = 0.0,
         orientation: float = 0.0,
-        k_s: float = 3.0,
-        alpha: float = 1.33e-6,
+        k_s: float = 3.7,
+        alpha: float = 1.59e-6,
         r_in: float = 0.015,
-        r_out: float = 0.020,
-        D_s: float = 0.040,
-        k_p: float = 0.42,
-        k_g: float = 1.0,
-        epsilon: float = 1e-6,
+        r_out: float = 0.018,
+        D_s: float = 0.030,
+        k_p: float = 0.38,
+        k_g: float = 2.3,
+        epsilon: float = 1e-4,
         COP: float = 3.5,
-        G: float = 0.025,
+        G: float = 0.03,
         pattern: str = "rectangular",
+        num_sectors: int | None = None,
     ) -> str:
         """Run a pygfunction borehole heat exchanger simulation using the heating
         demands most recently generated for the current building.
@@ -1192,30 +1193,33 @@ def _make_run_borehole_simulation_tool(session: Session):
         climate normals at the building's coordinates.
 
         Args:
-            N_1: Number of boreholes in the x direction for pattern = "rectangular"; 
+            N_1: Number of boreholes in the x direction for pattern = "rectangular";
             else, it is the total number of boreholes. Default 1.
-            N_2: Number of boreholes in the y direction for pattern = "rectangular". 
-            If pattern = "polygonal", then it is the number of sides in the regular polygon. 
+            N_2: Number of boreholes in the y direction for pattern = "rectangular".
+            If pattern = "polygonal", then it is the number of sides in the regular polygon.
             Else, it does not do anything. Default 1.
-            B: radius of sunflower pattern if pattern = "sunflower"; else, it is the borehole spacing [m]. 
-            Default 5.
+            B: Borehole spacing [m] (centre-to-centre). For the sunflower pattern this
+            is the approximate nearest-neighbour spacing. Default 5.
             H: Active borehole length [m]. Default 200.
-            D: Buried depth from surface to top of active section [m]. Default 4.
-            r_b: Borehole radius [m]. Default 0.070 (140 mm diameter).
+            D: Buried depth from surface to top of active section [m]. Default 0.5 (matches Fimbul).
+            r_b: Borehole radius [m]. Default 0.065 (matches Fimbul).
             tilt: Borehole tilt angle from vertical [radians]. Default 0.
             orientation: Azimuthal direction of tilt [radians]. Default 0.
-            k_s: Ground thermal conductivity [W/(m·K)]. Default 3.0.
-            alpha: Ground thermal diffusivity [m²/s]. Default 1.33e-6.
+            k_s: Ground thermal conductivity [W/(m·K)]. Default 3.7 (matches Fimbul).
+            alpha: Ground thermal diffusivity [m²/s]. Default 1.59e-6 (matches Fimbul: 3.7/(2580×900)).
             r_in: Pipe inner radius [m]. Default 0.015.
-            r_out: Pipe outer radius [m]. Default 0.020.
-            D_s: Shank spacing, borehole centre to pipe centre [m]. Default 0.040.
-            k_p: Pipe wall thermal conductivity [W/(m·K)]. Default 0.42 (HDPE).
-            k_g: Grout thermal conductivity [W/(m·K)]. Default 1.0.
-            epsilon: Pipe inner-wall roughness [m]. Default 1e-6.
+            r_out: Pipe outer radius [m]. Default 0.018 (matches Fimbul).
+            D_s: Shank spacing, borehole centre to pipe centre [m]. Default 0.030 (matches Fimbul).
+            k_p: Pipe wall thermal conductivity [W/(m·K)]. Default 0.38 (matches Fimbul).
+            k_g: Grout thermal conductivity [W/(m·K)]. Default 2.3 (matches Fimbul).
+            epsilon: Pipe inner-wall roughness [m]. Default 1e-4 (matches Fimbul/JutulDarcy).
             COP: Heat-pump coefficient of performance. Default 3.5.
-            G: Geothermal gradient [K/m]. Default 0.025.
-            pattern: the pattern type for the borehole field. 
-            Possible values: "sunflower", "rectangular", "circular", "polygonal". 
+            G: Geothermal gradient [K/m]. Default 0.03 (matches Fimbul).
+            pattern: the pattern type for the borehole field.
+            Possible values: "sunflower", "rectangular", "circular", "polygonal".
+            num_sectors: Number of hydraulic sectors. Boreholes within a sector are
+            connected in series; sectors are connected in parallel. Defaults to the
+            total number of boreholes (one borehole per sector = fully parallel field).
         """
         import pandas as pd
 
@@ -1241,17 +1245,17 @@ def _make_run_borehole_simulation_tool(session: Session):
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
         try:
             if pattern == "rectangular":
-                boreholes = [[b] for b in rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation)]
+                boreholes = rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation, num_sectors)
             elif pattern == "sunflower":
-                boreholes = [[b] for b in sunflower_field(N_1,B,H,D,r_b,tilt,orientation)]
+                boreholes = sunflower_field(N_1, B, H, D, r_b, tilt, orientation, num_sectors)
             elif pattern == "circular":
-                boreholes = [[b] for b in circular_field(N_1, B, H, D, r_b, tilt, orientation)]
+                boreholes = circular_field(N_1, B, H, D, r_b, tilt, orientation, num_sectors)
             elif pattern == "polygonal":
-                boreholes = [[b] for b in polygonal_field(N_1,B,N_2,H,D,r_b,tilt,orientation)]
-            else: 
+                boreholes = polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation, num_sectors)
+            else:
                 raise ValueError(
                     f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
-                    )
+                )
             
             df_result, gfunc_time, gfunc_vals = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -1306,21 +1310,22 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
         N_2: list[int] = [1],
         B: list[float] = [5.0],
         H: list[float] = [200.0],
-        D: list[float] = [4.0],
-        r_b: list[float] = [0.070],
+        D: list[float] = [0.5],
+        r_b: list[float] = [0.065],
         tilt: list[float] = [0.0],
         orientation: list[float] = [0.0],
-        k_s: list[float] = [3.0],
-        alpha: list[float] = [1.33e-6],
+        k_s: list[float] = [3.7],
+        alpha: list[float] = [1.59e-6],
         r_in: list[float] = [0.015],
-        r_out: list[float] = [0.020],
-        D_s: list[float] = [0.040],
-        k_p: list[float] = [0.42],
-        k_g: list[float] = [1.0],
-        epsilon: list[float] = [1e-6],
+        r_out: list[float] = [0.018],
+        D_s: list[float] = [0.030],
+        k_p: list[float] = [0.38],
+        k_g: list[float] = [2.3],
+        epsilon: list[float] = [1e-4],
         COP: list[float] = [3.5],
-        G: list[float] = [0.025],
+        G: list[float] = [0.03],
         pattern: str = "rectangular",
+        num_sectors: int | None = None,
     ) -> str:
         """Run pygfunction borehole simulations for every combination of the given
         parameter lists and report summary temperatures (min/mean/max T_in and T_out)
@@ -1342,22 +1347,25 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
                 or number of polygon sides (polygonal). Default [1].
             B: List of values for borehole spacing [m] or sunflower radius [m]. Default [5.0].
             H: List of values for active borehole length [m]. Default [200.0].
-            D: List of values for buried depth [m]. Default [4.0].
-            r_b: List of values for borehole radius [m]. Default [0.070].
+            D: List of values for buried depth [m]. Default [0.5] (matches Fimbul).
+            r_b: List of values for borehole radius [m]. Default [0.065] (matches Fimbul).
             tilt: List of values for tilt angle from vertical [radians]. Default [0.0].
             orientation: List of values for azimuthal direction of tilt [radians]. Default [0.0].
-            k_s: List of values for ground thermal conductivity [W/(m·K)]. Default [3.0].
-            alpha: List of values for ground thermal diffusivity [m²/s]. Default [1.33e-6].
+            k_s: List of values for ground thermal conductivity [W/(m·K)]. Default [3.7] (matches Fimbul).
+            alpha: List of values for ground thermal diffusivity [m²/s]. Default [1.59e-6] (matches Fimbul).
             r_in: List of values for pipe inner radius [m]. Default [0.015].
-            r_out: List of values for pipe outer radius [m]. Default [0.020].
-            D_s: List of values for shank spacing [m]. Default [0.040].
-            k_p: List of values for pipe wall thermal conductivity [W/(m·K)]. Default [0.42].
-            k_g: List of values for grout thermal conductivity [W/(m·K)]. Default [1.0].
-            epsilon: List of values for pipe roughness [m]. Default [1e-6].
+            r_out: List of values for pipe outer radius [m]. Default [0.018] (matches Fimbul).
+            D_s: List of values for shank spacing [m]. Default [0.030] (matches Fimbul).
+            k_p: List of values for pipe wall thermal conductivity [W/(m·K)]. Default [0.38] (matches Fimbul).
+            k_g: List of values for grout thermal conductivity [W/(m·K)]. Default [2.3] (matches Fimbul).
+            epsilon: List of values for pipe roughness [m]. Default [1e-4] (matches Fimbul/JutulDarcy).
             COP: List of values for heat-pump COP. Default [3.5].
-            G: List of values for geothermal gradient [K/m]. Default [0.025].
+            G: List of values for geothermal gradient [K/m]. Default [0.03] (matches Fimbul).
             pattern: Borehole field pattern shared across all combinations.
                 One of: "rectangular", "sunflower", "circular", "polygonal".
+            num_sectors: Number of hydraulic sectors (fixed across all combinations).
+                Boreholes within a sector are connected in series; sectors in parallel.
+                Defaults to total number of boreholes (fully parallel field).
         """
         import itertools
 
@@ -1416,17 +1424,17 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
             row: dict = dict(zip(param_names, combo))
             try:
                 if pattern == "rectangular":
-                    boreholes = [[b] for b in rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)]
+                    boreholes = rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
                 elif pattern == "sunflower":
-                    boreholes = [[b] for b in sunflower_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)]
+                    boreholes = sunflower_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
                 elif pattern == "circular":
-                    boreholes = [[b] for b in circular_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation)]
+                    boreholes = circular_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
                 elif pattern == "polygonal":
-                    boreholes = [[b] for b in polygonal_field(c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation)]
-                else: 
+                    boreholes = polygonal_field(c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
+                else:
                     raise ValueError(
                         f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
-                        )
+                    )
                 df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: simulate_borehole_temperatures(
@@ -1807,10 +1815,11 @@ def _fimbul_validation_png(
     T_in_C: list[float],
     T_out_C: list[float],
     durations_s: list[float],
-    energy_kWh: list[float],
+    building_kWh: list[float],
     demand_kWh_windowed: list[float],
+    COP: float,
 ) -> str:
-    """Two-panel PNG: (top) T_in/T_out vs cumulative days, (bottom) Fimbul extraction vs demand."""
+    """Two-panel PNG: (top) T_in/T_out vs cumulative days, (bottom) implied building heat vs demand."""
     import base64
     import io
 
@@ -1830,11 +1839,12 @@ def _fimbul_validation_png(
     ax1.legend()
 
     ax2.plot(days, demand_kWh_windowed, color="#e67e22", linewidth=0.8, label="Heating demand")
-    ax2.plot(days, energy_kWh,          color="#27ae60", linewidth=0.8, label="Fimbul extraction")
+    ax2.plot(days, building_kWh,        color="#27ae60", linewidth=0.8,
+             label=f"Fimbul implied building heat (COP={COP})")
     ax2.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
     ax2.set_xlabel("Day of year")
     ax2.set_ylabel("Energy [kWh]")
-    ax2.set_title("Fimbul extraction vs heating demand (windowed)")
+    ax2.set_title("Fimbul implied building heat vs heating demand (windowed)")
     ax2.legend()
 
     fig.tight_layout()
@@ -1854,21 +1864,22 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         N_2: int = 1,
         B: float = 5.0,
         H: float = 200.0,
-        D: float = 4.0,
-        r_b: float = 0.070,
+        D: float = 0.5,
+        r_b: float = 0.065,
         tilt: float = 0.0,
         orientation: float = 0.0,
-        k_s: float = 3.0,
-        alpha: float = 1.33e-6,
+        k_s: float = 3.7,
+        alpha: float = 1.59e-6,
         r_in: float = 0.015,
-        r_out: float = 0.020,
-        D_s: float = 0.040,
-        k_p: float = 0.42,
-        k_g: float = 1.0,
-        epsilon: float = 1e-6,
+        r_out: float = 0.018,
+        D_s: float = 0.030,
+        k_p: float = 0.38,
+        k_g: float = 2.3,
+        epsilon: float = 1e-4,
         COP: float = 3.5,
-        G: float = 0.025,
+        G: float = 0.03,
         pattern: str = "rectangular",
+        num_sectors: int | None = None,
         window_hours: int = 24,
     ) -> str:
         """Validate a pygfunction borehole geometry with a Fimbul PDE simulation.
@@ -1886,22 +1897,25 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             N_2: Number of boreholes in y (rectangular) or polygon sides. Default 1.
             B: Borehole spacing [m] or sunflower radius [m]. Default 5.
             H: Active borehole depth [m]. Default 200.
-            D: Buried depth [m]. Default 4.
-            r_b: Borehole radius [m]. Default 0.070.
+            D: Buried depth [m]. Default 0.5 (matches Fimbul).
+            r_b: Borehole radius [m]. Default 0.065 (matches Fimbul).
             tilt: Tilt angle from vertical [radians]. Default 0.
             orientation: Azimuthal direction of tilt [radians]. Default 0.
-            k_s: Ground thermal conductivity [W/(m·K)]. Default 3.0.
-            alpha: Ground thermal diffusivity [m²/s]. Default 1.33e-6.
+            k_s: Ground thermal conductivity [W/(m·K)]. Default 3.7 (matches Fimbul).
+            alpha: Ground thermal diffusivity [m²/s]. Default 1.59e-6 (matches Fimbul: 3.7/(2580×900)).
             r_in: Pipe inner radius [m]. Default 0.015.
-            r_out: Pipe outer radius [m]. Default 0.020.
-            D_s: Shank spacing [m]. Default 0.040.
-            k_p: Pipe wall thermal conductivity [W/(m·K)]. Default 0.42.
-            k_g: Grout thermal conductivity [W/(m·K)]. Default 1.0.
-            epsilon: Pipe roughness [m]. Default 1e-6.
+            r_out: Pipe outer radius [m]. Default 0.018 (matches Fimbul).
+            D_s: Shank spacing [m]. Default 0.030 (matches Fimbul).
+            k_p: Pipe wall thermal conductivity [W/(m·K)]. Default 0.38 (matches Fimbul).
+            k_g: Grout thermal conductivity [W/(m·K)]. Default 2.3 (matches Fimbul).
+            epsilon: Pipe roughness [m]. Default 1e-4 (matches Fimbul/JutulDarcy).
             COP: Heat-pump COP. Default 3.5.
-            G: Geothermal gradient [K/m]. Default 0.025.
+            G: Geothermal gradient [K/m]. Default 0.03 (matches Fimbul).
             pattern: Field layout — "rectangular", "sunflower", "circular",
                 or "polygonal". Default "rectangular".
+            num_sectors: Number of hydraulic sectors. Boreholes within a sector are
+                connected in series; sectors are connected in parallel. Defaults to the
+                total number of boreholes (one borehole per sector = fully parallel field).
             window_hours: Averaging window width in hours. Default 24 (daily).
         """
         import asyncio
@@ -1928,13 +1942,13 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
 
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
         if pattern == "rectangular":
-            boreholes = [[b] for b in rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation)]
+            boreholes = rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation, num_sectors)
         elif pattern == "sunflower":
-            boreholes = [[b] for b in sunflower_field(N_1, B, H, D, r_b, tilt, orientation)]
+            boreholes = sunflower_field(N_1, B, H, D, r_b, tilt, orientation, num_sectors)
         elif pattern == "circular":
-            boreholes = [[b] for b in circular_field(N_1, B, H, D, r_b, tilt, orientation)]
+            boreholes = circular_field(N_1, B, H, D, r_b, tilt, orientation, num_sectors)
         elif pattern == "polygonal":
-            boreholes = [[b] for b in polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation)]
+            boreholes = polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation, num_sectors)
         else:
             return f"Unknown pattern {pattern!r}."
 
@@ -1967,10 +1981,16 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
 
         setup = {
             "num_boreholes":       N,
-            "num_sectors":         N,
+            "num_sectors":         num_sectors if num_sectors is not None else N,
+            "pattern":             pattern,
+            "num_sides":           N_2 if pattern == "polygonal" else 6,
             "H":                   H,
+            "D":                   D,
+            "tilt":                tilt,
+            "orientation":         orientation,
             "B":                   B,
             "k_s":                 k_s,
+            "alpha":               alpha,
             "G":                   G,
             "T_surface_C":         T_surface,
             "m_flow_per_borehole": fluid.m_flow_per_borehole,
@@ -2000,22 +2020,29 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         if val.get("status") != "completed":
             return f"Fimbul error: {val.get('message', 'unknown')}"
 
+        ground_kWh = val["energy_kWh"]
+        building_kWh = [e * COP / (COP - 1.0) for e in ground_kWh]
+
         _session_fimbul_validation_results[session.session_id] = {
-            "window_hours": window_hours,
-            "T_in_C":       val["T_in_C"],
-            "T_out_C":      val["T_out_C"],
-            "energy_kWh":   val["energy_kWh"],
-            "durations_s":  val["durations_s"],
-            "n_periods":    val["n_periods"],
+            "window_hours":   window_hours,
+            "T_in_C":         val["T_in_C"],
+            "T_out_C":        val["T_out_C"],
+            "energy_kWh":     ground_kWh,
+            "building_kWh":   building_kWh,
+            "durations_s":    val["durations_s"],
+            "n_periods":      val["n_periods"],
+            "COP":            COP,
         }
 
         T_out = val["T_out_C"]
         n = val["n_periods"]
+        total_building = sum(building_kWh)
         return (
             f"Fimbul validation: {n} windows of {window_hours} h.\n"
             f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
             f"mean {sum(T_out)/n:.1f} °C\n"
-            f"Total extracted energy: {val['total_energy_kWh']:.0f} kWh\n"
+            f"Total implied building heat: {total_building:.0f} kWh "
+            f"(ground extraction × COP/(COP−1), COP={COP})\n"
             "Use view_fimbul_validation to plot."
         )
 
@@ -2039,12 +2066,14 @@ def _make_view_fimbul_validation_tool(session: Session):
         if result is None:
             return "No Fimbul validation result found. Run run_fimbul_validation first."
 
-        T_in_C      = result["T_in_C"]
-        T_out_C     = result["T_out_C"]
-        energy_kWh  = result["energy_kWh"]
-        durations_s = result["durations_s"]
-        n           = result["n_periods"]
-        wh          = result["window_hours"]
+        T_in_C       = result["T_in_C"]
+        T_out_C      = result["T_out_C"]
+        energy_kWh   = result["energy_kWh"]
+        building_kWh = result["building_kWh"]
+        durations_s  = result["durations_s"]
+        n            = result["n_periods"]
+        wh           = result["window_hours"]
+        COP          = result["COP"]
 
         # Aggregate raw demand (kW, hourly) over the same windows used by Fimbul.
         demand = get_session_demand_data(session.session_id)
@@ -2062,7 +2091,7 @@ def _make_view_fimbul_validation_tool(session: Session):
 
         try:
             b64 = _fimbul_validation_png(
-                T_in_C, T_out_C, durations_s, energy_kWh, demand_kWh_windowed
+                T_in_C, T_out_C, durations_s, building_kWh, demand_kWh_windowed, COP
             )
         except Exception as exc:
             return f"Plot generation failed: {exc}"
@@ -2091,13 +2120,13 @@ def _make_view_fimbul_validation_tool(session: Session):
         )
 
         stats = (
-            f"{n} windows of {wh} h\n"
+            f"{n} windows of {wh} h  (COP={COP})\n"
             f"T_in:  min {min(T_in_C):.2f} °C  max {max(T_in_C):.2f} °C  "
             f"mean {sum(T_in_C)/n:.2f} °C\n"
             f"T_out: min {min(T_out_C):.2f} °C  max {max(T_out_C):.2f} °C  "
             f"mean {sum(T_out_C)/n:.2f} °C\n"
-            f"Total extracted energy: {sum(energy_kWh):.0f} kWh\n"
-            f"Total heating demand:   {sum(demand_kWh_windowed):.0f} kWh\n"
+            f"Total implied building heat: {sum(building_kWh):.0f} kWh\n"
+            f"Total heating demand:        {sum(demand_kWh_windowed):.0f} kWh\n"
             f"Periods with negative extraction: {sum(1 for e in energy_kWh if e < 0)}"
         )
         return [

@@ -687,6 +687,7 @@ function run_btes_validation(setup::AbstractDict)
         num_wells   = round(Int, setup["num_boreholes"])
         num_sectors = round(Int, setup["num_sectors"])
         H, B, k_s   = f64("H"), f64("B"), f64("k_s")
+        alpha       = f64("alpha")
         T_surf_C, G = f64("T_surface_C"), f64("G")
         m_flow, rho_f, cp_f = f64("m_flow_per_borehole"), f64("rho_fluid"), f64("cp_fluid")
         T_in_C      = Float64.(setup["T_in_C"])
@@ -698,18 +699,35 @@ function run_btes_validation(setup::AbstractDict)
         G_SI        = G * Fimbul.Kelvin/Fimbul.meter
         rate_SI     = m_flow / rho_f
         T_in_mean_K = Fimbul.convert_to_si(sum(T_in_C) / n_periods, :Celsius)
-        depths      = [0.0, 0.5, H, H + 15.0]
+        D           = f64("D")
+        tilt        = f64("tilt")
+        H_vert      = H * cos(tilt)   # vertical depth of borehole tip [m]
+        depths      = [0.0, D, D + H_vert, D + H_vert + 15.0]
+        # Match Fimbul's effective thermal diffusivity to pygfunction's alpha.
+        # density of rock layers is fixed at [30, 2580, 2580] kg/m³; derive
+        # heat capacity so that alpha = k_s / (rho * cp) holds for the rock layers.
+        rock_density  = 2580.0  # kg/m³
+        rock_cp       = k_s / (alpha * rock_density)  # J/(kg·K)
 
-        _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, H=$(H) m, B=$(B) m...")
+        pattern_str = setup["pattern"]
+        pattern_sym = Symbol(pattern_str)
+        num_sides   = round(Int, setup["num_sides"])
+
+        _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, pattern=$pattern_str, H=$(H) m, B=$(B) m...")
 
         # Call btes() with a 1-year dummy schedule purely to obtain the model,
         # state0, and sectors dict. The schedule is discarded immediately.
         dummy = btes(
+            pattern_sym,
             num_wells             = num_wells,
+            num_sides             = num_sides,
             num_sectors           = num_sectors,
             well_spacing          = B,
+            well_depth            = D + H_vert,   # total depth from surface to borehole tip
             depths                = depths,
+            density               = [30.0, rock_density, rock_density] .* Fimbul.kilogram/Fimbul.meter^3,
             thermal_conductivity  = [0.034, k_s, k_s] .* Fimbul.watt/Fimbul.meter/Fimbul.Kelvin,
+            heat_capacity         = [1500.0, rock_cp, rock_cp] .* Fimbul.joule/Fimbul.kilogram/Fimbul.Kelvin,
             geothermal_gradient   = G_SI,
             temperature_charge    = T_in_mean_K,
             temperature_discharge = T_in_mean_K,
