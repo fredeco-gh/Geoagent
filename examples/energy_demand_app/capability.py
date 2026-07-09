@@ -1846,6 +1846,8 @@ def _fimbul_validation_png(
 
 
 def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
+    from jutul_agent.agent.tools import _capture_delta_writer
+
     @tool
     async def run_fimbul_validation(  # noqa: PLR0913
         N_1: int = 1,
@@ -1990,7 +1992,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             RESULT_PATH=result_path.as_posix(),
         )
 
-        jl_result = await session.julia.eval(code)
+        jl_result = await session.julia.eval(code, on_chunk=_capture_delta_writer())
         if jl_result.error:
             return f"Julia error: {jl_result.error}"
 

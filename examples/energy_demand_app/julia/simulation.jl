@@ -765,7 +765,7 @@ function run_btes_validation(setup::AbstractDict)
         # T_out = outlet of the last return well in each sector, averaged across sectors.
         # sectors[:Sk] = [supply_1, return_1, ..., supply_n, return_n], so [end] is the sector outlet.
         T_out_K = sum(
-            collect(Float64, results.wells[filter(is_ret, collect(sw))[end]][:Temperature])
+            collect(Float64, results.wells[filter(is_ret, collect(sw))[end]][:temperature])
             for (_, sw) in pairs(sectors)
         ) ./ length(sectors)
         T_out_C = Fimbul.convert_from_si.(T_out_K, :Celsius)
