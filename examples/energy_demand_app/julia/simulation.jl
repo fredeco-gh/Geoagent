@@ -389,7 +389,7 @@ function _run_fimbul_live(case_type, params)
         elseif case_type == "BTES"
             _sim_log_push!("Creating BTES case with $(get(params, "num_wells_btes", "?")) wells...")
             case = Fimbul.btes(;
-                num_wells            = round(Int, params["num_wells_btes"]),
+                num_wells_1          = round(Int, params["num_wells_btes"]),
                 num_sectors          = round(Int, params["num_sectors"]),
                 well_spacing         = params["well_spacing"],
                 temperature_charge   = Fimbul.convert_to_si(params["temperature_charge"], :Celsius),

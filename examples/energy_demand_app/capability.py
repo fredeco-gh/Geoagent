@@ -1369,6 +1369,7 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
         G: list[float] = [0.03],
         pattern: str = "rectangular",
         num_sectors: int | None = None,
+        overrides: dict[str, dict[str, dict[str, list]]] | None = None,
     ) -> str:
         """Run pygfunction borehole simulations for every combination of the given
         parameter lists and report summary temperatures (min/mean/max T_in and T_out)
@@ -1409,6 +1410,23 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
             num_sectors: Number of hydraulic sectors (fixed across all combinations).
                 Boreholes within a sector are connected in series; sectors in parallel.
                 Defaults to total number of boreholes (fully parallel field).
+            overrides: Optional per-borehole parameter changes included in the sweep.
+                Same nested structure as run_borehole_simulation's overrides, but each
+                parameter value is a list that participates in the Cartesian product:
+                {"sector_index": {"well_index": {"param": [v1, v2, ...], ...}, ...}, ...}
+                Recognised per-borehole keys (each a list of floats):
+                  H: active borehole depth [m].
+                  D: buried depth [m].
+                  r_b: borehole radius [m].
+                  tilt: tilt from vertical [radians].
+                  orientation: azimuthal direction of tilt [radians].
+                  dx: list of displacements added to the pattern x-coordinate [m].
+                  dy: list of displacements added to the pattern y-coordinate [m].
+                Each (sector, well, param) triple is an independent sweep dimension.
+                Example — sweep over two depths for well 1 in sector 0, and two displacements in the 
+                x- and y-directions for well 2 in sector 0:
+                {"0": {"1": {"H": [200.0,250.0]}, "2": {"dx": [1.0,2.0], "dy": [3.0,5.0]}}}
+
         """
         import itertools
 
@@ -1449,6 +1467,20 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
             N_1, N_2, B, H, D, r_b, tilt, orientation,
             k_s, alpha, r_in, r_out, D_s, k_p, k_g, epsilon, COP, G,
         ]
+        n_base = len(param_names)
+
+        # Flatten overrides into additional sweep dimensions.
+        # Each (sector, well, param) triple becomes one entry in param_names/param_lists.
+        # The label "[s,w].param" appears in the varied/fixed output.
+        override_dims: list[tuple[str, str, str]] = []  # (sector_str, well_str, param)
+        if overrides:
+            for s_str, wells in overrides.items():
+                for w_str, changes in wells.items():
+                    for param_key, values in changes.items():
+                        vals = values if isinstance(values, list) else [values]
+                        override_dims.append((s_str, w_str, param_key))
+                        param_names.append(f"[{s_str},{w_str}].{param_key}")
+                        param_lists.append([float(v) for v in vals])
 
         varied = [name for name, vals in zip(param_names, param_lists) if len(vals) > 1]
         fixed = {
@@ -1461,10 +1493,18 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
 
         rows: list[dict] = []
         for combo in combos:
+            base_combo = combo[:n_base]
+            ov_vals = combo[n_base:]
             (c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation,
              c_k_s, c_alpha, c_r_in, c_r_out, c_D_s, c_k_p, c_k_g, c_epsilon,
-             c_COP, c_G) = combo
+             c_COP, c_G) = base_combo
             row: dict = dict(zip(param_names, combo))
+
+            # Reconstruct a scalar overrides dict for this combo.
+            combo_overrides: dict[str, dict[str, dict]] = {}
+            for (s_str, w_str, param_key), val in zip(override_dims, ov_vals):
+                combo_overrides.setdefault(s_str, {}).setdefault(w_str, {})[param_key] = val
+
             try:
                 if pattern == "rectangular":
                     boreholes = rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
@@ -1478,6 +1518,7 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
                     raise ValueError(
                         f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
                     )
+                boreholes = _apply_overrides(boreholes, combo_overrides or None)
                 df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: simulate_borehole_temperatures(
