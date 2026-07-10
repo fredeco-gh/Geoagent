@@ -309,8 +309,7 @@ def _make_go_to_well_tool(session: Session, data_path: str):
         if feature is None:
             return (
                 f"No well matching '{identifier}' was found in the loaded borehole "
-                "data — tell the user it doesn't exist rather than saying you moved "
-                "the map."
+                "data — tell the user that."
             )
         lon, lat = feature["geometry"]["coordinates"]
         _ensure_map_pinned(session)
@@ -1685,8 +1684,8 @@ const d={data};
 new Chart(document.getElementById('c'),{{
   type:'line',
   data:{{labels:d.labels,datasets:[
-    {{label:'T_in (°C)',data:d.T_in,borderColor:'#2980b9',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
-    {{label:'T_out (°C)',data:d.T_out,borderColor:'#27ae60',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
+    {{label:'Tᵢₙ (°C)',data:d.T_in,borderColor:'#2980b9',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
+    {{label:'Tₒᵤₜ (°C)',data:d.T_out,borderColor:'#27ae60',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
   ]}},
   options:{{responsive:true,animation:false,plugins:{{legend:{{position:'top'}}}},
     scales:{{
@@ -1953,34 +1952,48 @@ def _fimbul_validation_png(
     building_kWh: list[float],
     demand_kWh_windowed: list[float],
     COP: float,
+    start_ts: str | None = None,
 ) -> str:
-    """Two-panel PNG: (top) T_in/T_out vs cumulative days, (bottom) implied building heat vs demand."""
+    """Two-panel PNG: (top) T_in/T_out vs time, (bottom) implied building heat vs demand."""
     import base64
     import io
+    from datetime import datetime, timedelta
 
     import matplotlib
     matplotlib.use("Agg")
+    import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
 
-    days = [sum(durations_s[:i]) / 86400 for i in range(len(durations_s))]
+    cum_s = [sum(durations_s[:i]) for i in range(len(durations_s))]
+    if start_ts is not None:
+        t0 = datetime.fromisoformat(start_ts)
+        xs = [t0 + timedelta(seconds=s) for s in cum_s]
+        use_dates = True
+    else:
+        xs = [s / 86400 for s in cum_s]
+        use_dates = False
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
 
-    ax1.plot(days, T_in_C,  color="#d62728", linewidth=0.8, label="T_in (prescribed)")
-    ax1.plot(days, T_out_C, color="#1f77b4", linewidth=0.8, label="T_out (Fimbul)")
+    ax1.plot(xs, T_in_C,  color="#d62728", linewidth=0.8, label="Tᵢₙ (prescribed)")
+    ax1.plot(xs, T_out_C, color="#1f77b4", linewidth=0.8, label="Tₒᵤₜ (Fimbul)")
     ax1.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
     ax1.set_ylabel("Temperature [°C]")
-    ax1.set_title("Fimbul validation: prescribed T_in vs computed T_out")
+    ax1.set_title("Fimbul validation: prescribed Tᵢₙ vs computed Tₒᵤₜ")
     ax1.legend()
 
-    ax2.plot(days, demand_kWh_windowed, color="#e67e22", linewidth=0.8, label="Heating demand")
-    ax2.plot(days, building_kWh,        color="#27ae60", linewidth=0.8,
-             label=f"Fimbul implied building heat (COP={COP})")
+    ax2.plot(xs, demand_kWh_windowed, color="#e67e22", linewidth=0.8, label="Heating needs")
+    ax2.plot(xs, building_kWh,        color="#27ae60", linewidth=0.8,
+             label="Fimbul implied building heating")
     ax2.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
-    ax2.set_xlabel("Day of year")
-    ax2.set_ylabel("Energy [kWh]")
-    ax2.set_title("Fimbul implied building heat vs heating demand (windowed)")
+    ax2.set_xlabel("Time" if use_dates else "Day of year")
+    ax2.set_ylabel("Heating [kWh]")
+    ax2.set_title("Fimbul implied building heat vs heating needs")
     ax2.legend()
+
+    if use_dates:
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+        fig.autofmt_xdate()
 
     fig.tight_layout()
     buf = io.BytesIO()
@@ -2347,9 +2360,10 @@ def _make_view_fimbul_validation_tool(session: Session):
         else:
             demand_kWh_windowed = [0.0] * n
 
+        start_ts = demand["timestamps"][0] if demand is not None and demand.get("timestamps") else None
         try:
             b64 = _fimbul_validation_png(
-                T_in_C, T_out_C, durations_s, building_kWh, demand_kWh_windowed, COP
+                T_in_C, T_out_C, durations_s, building_kWh, demand_kWh_windowed, COP, start_ts
             )
         except Exception as exc:
             return f"Plot generation failed: {exc}"
@@ -2377,6 +2391,11 @@ def _make_view_fimbul_validation_tool(session: Session):
             },
         )
 
+        import math
+        diffs = [b - d for b, d in zip(building_kWh, demand_kWh_windowed)]
+        mean_diff = sum(diffs) / n
+        rmse = math.sqrt(sum(d ** 2 for d in diffs) / n)
+
         stats = (
             f"{n} windows of {wh} h  (COP={COP})\n"
             f"T_in:  min {min(T_in_C):.2f} °C  max {max(T_in_C):.2f} °C  "
@@ -2385,6 +2404,8 @@ def _make_view_fimbul_validation_tool(session: Session):
             f"mean {sum(T_out_C)/n:.2f} °C\n"
             f"Total implied building heat: {sum(building_kWh):.0f} kWh\n"
             f"Total heating demand:        {sum(demand_kWh_windowed):.0f} kWh\n"
+            f"Mean difference (Fimbul − needs): {mean_diff:+.2f} kWh/window\n"
+            f"RMSE (Fimbul vs needs):           {rmse:.2f} kWh/window\n"
             f"Periods with negative extraction: {sum(1 for e in energy_kWh if e < 0)}"
         )
         return [

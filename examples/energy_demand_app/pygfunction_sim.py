@@ -656,12 +656,17 @@ def simulate_borehole_temperatures(
     # 'equivalent' is fastest but only handles vertical boreholes; fall back to
     # 'similarities' when any borehole has a non-zero tilt.
     method = "similarities" if any(b.tilt != 0.0 for b in boreholes_gt) else "equivalent"
+    # nSegments controls per-borehole axial discretisation in the g-function.
+    # Accuracy gain drops quickly with field size (borehole interactions dominate),
+    # while memory scales as (N*nSegments)^2. Cap at 1 for large fields.
+    n_boreholes = len(boreholes_gt)
+    n_segments = 8 if n_boreholes <= 10 else (4 if n_boreholes <= 30 else 1)
     gFunc = gt.gfunction.gFunction(
         boreholes_gt,
         ground.alpha,
         time=time_req,
         method=method,
-        options={"nSegments": 8},
+        options={"nSegments": n_segments},
     )
     LoadAgg.initialize(gFunc.gFunc / (2.0 * np.pi * ground.k_s))
 
