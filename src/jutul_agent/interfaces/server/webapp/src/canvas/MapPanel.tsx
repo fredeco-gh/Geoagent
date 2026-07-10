@@ -631,6 +631,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           lon = centroid.lng;
         }
         popupRef.current?.remove();
+        wellbore3dRef.current?.remove();
         setSelected(null);
         buildingTemperatureRef.current = null;
         setSimPanelOpen(false);
@@ -723,6 +724,15 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         setSimStatus(null);
         setSimSetup(null);
         setSimError(message || "Could not resolve simulation parameters.");
+      } else if (action === "show_borehole_field") {
+        const { lat, lon, boreholes } = payload as {
+          lat: number;
+          lon: number;
+          boreholes: Array<{ x: number; y: number; H: number }>;
+        };
+        if (typeof lon === "number" && typeof lat === "number" && Array.isArray(boreholes)) {
+          wellbore3dRef.current?.showField({ lng: lon, lat }, boreholes);
+        }
       } else if (action === "energy_demand_ready") {
         const { status, message } = payload as { status: string; message?: string };
         if (status === "error") {

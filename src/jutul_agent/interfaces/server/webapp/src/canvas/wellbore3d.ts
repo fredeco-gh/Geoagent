@@ -286,9 +286,60 @@ function buildVertices(
   return new Float32Array(verts);
 }
 
+/** One borehole's position (metres relative to the field origin) and depth. */
+export interface BoreholePos {
+  x: number;
+  y: number;
+  H: number;
+}
+
+/** Build all vertex data for a field of boreholes at explicit positions.
+ *  displayScale inflates every metre offset uniformly so the field is visible
+ *  at FLY_ZOOM — the same concept as the BTES displaySpacing inflation. */
+function buildFieldVertices(
+  center: Mercator,
+  scale: number,
+  boreholes: BoreholePos[],
+  displayScale: number,
+  progress: number,
+  groundElevation: number,
+): Float32Array {
+  const verts: number[] = [];
+  const baseRadius = PARK_WELL_RADIUS * scale;
+  const base = groundElevation + VERTICAL_OFFSET;
+
+  for (const bh of boreholes) {
+    const cx = center.x + bh.x * displayScale * scale;
+    const cy = center.y - bh.y * displayScale * scale; // Mercator y increases southward
+    const depth = bh.H;
+    const nSeg = Math.max(MIN_SEGMENTS, Math.min(Math.round(depth / 20), MAX_SEGMENTS));
+    const segTotal = depth / nSeg;
+    const segHeight = segTotal * (1 - SEGMENT_GAP_FRAC);
+
+    let curZ = base;
+    for (let i = 0; i < nSeg; i++) {
+      const t = nSeg > 1 ? i / (nSeg - 1) : 0.5;
+      const col = depthColor(t);
+      const z0 = curZ * scale * progress;
+      const z1 = (curZ + segHeight) * scale * progress;
+      if (z1 > z0 + 1e-12) addTube(verts, cx, cy, z0, z1, baseRadius, col, 1.0);
+      curZ += segTotal;
+    }
+
+    const capH = Math.max(depth * CAP_HEIGHT_FRAC, 3);
+    const capZ0 = (base + depth) * scale * progress;
+    const capZ1 = (base + depth + capH) * scale * progress;
+    if (capZ1 > capZ0 + 1e-12) addCappedCylinder(verts, cx, cy, capZ0, capZ1, baseRadius * 1.25, CAP_COLOR, 1.0);
+  }
+
+  return new Float32Array(verts);
+}
+
 export interface Wellbore3D {
   /** Show (or replace) the 3D wellbore at `lngLat`, animating it rising up. */
   show(lngLat: { lng: number; lat: number }, params: Record<string, number>, caseType: string | null): void;
+  /** Show (or replace) a borehole field at `lngLat` using explicit positions. */
+  showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[]): void;
   /** Live-update displayed parameters (e.g. an edited depth) without re-animating. */
   update(params: Record<string, number>): void;
   /** Remove the layer; safe to call when nothing is shown. */
@@ -306,6 +357,8 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     lngLat: null as { lng: number; lat: number } | null,
     params: null as Record<string, number> | null,
     caseType: null as string | null,
+    boreholes: null as BoreholePos[] | null,
+    fieldDisplayScale: 1, // uniform scale applied to positions + radius in showField
     progress: 0,
     animStart: 0,
     needsBuild: false,
@@ -318,11 +371,13 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
   };
 
   function rebuild(gl: WebGLRenderingContext): void {
-    if (!state.lngLat || !state.params || !state.buffer) return;
+    if (!state.lngLat || !state.buffer) return;
     const mc = maplibregl.MercatorCoordinate.fromLngLat(state.lngLat, 0);
     const scale = mc.meterInMercatorCoordinateUnits();
     const groundElevation = map.queryTerrainElevation(state.lngLat) ?? 0;
-    const vertices = buildVertices(mc, scale, state.params, state.caseType, state.progress, groundElevation);
+    const vertices = state.boreholes
+      ? buildFieldVertices(mc, scale, state.boreholes, state.fieldDisplayScale, state.progress, groundElevation)
+      : buildVertices(mc, scale, state.params!, state.caseType, state.progress, groundElevation);
     gl.bindBuffer(gl.ARRAY_BUFFER, state.buffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
     state.vertCount = vertices.length / 7;
@@ -409,6 +464,7 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     state.active = false;
     state.vertCount = 0;
     state.params = null;
+    state.boreholes = null;
     state.lngLat = null;
     map.triggerRepaint();
   }
@@ -429,6 +485,55 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     map.triggerRepaint();
   }
 
+  function showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[]): void {
+    remove();
+
+    state.lngLat = lngLat;
+    state.boreholes = boreholes;
+    state.active = true;
+    state.progress = 0;
+    state.animStart = performance.now() + ANIM_DELAY;
+
+    if (!map.getLayer(LAYER_ID)) map.addLayer(customLayer);
+
+    // Inflate the field uniformly (positions + radius) using the same displaySpacing
+    // logic as the BTES hex layout, so the field occupies similar screen real estate
+    // at FLY_ZOOM. Fly to the actual geographic centroid of the field (not scaled).
+    let flyLng = lngLat.lng;
+    let flyLat = lngLat.lat;
+    state.fieldDisplayScale = 1;
+    if (boreholes.length > 1) {
+      const xs = boreholes.map((b) => b.x);
+      const ys = boreholes.map((b) => b.y);
+      const xMid = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const yMid = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const cosLat = Math.cos(lngLat.lat * (Math.PI / 180));
+      flyLat = lngLat.lat + yMid / 111320;
+      flyLng = lngLat.lng + xMid / (111320 * cosLat);
+
+      // Minimum spacing between any two boreholes (O(N²), N is small in practice).
+      let minSpacing = Infinity;
+      for (let i = 0; i < boreholes.length; i++) {
+        for (let j = i + 1; j < boreholes.length; j++) {
+          const dx = boreholes[i].x - boreholes[j].x;
+          const dy = boreholes[i].y - boreholes[j].y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < minSpacing) minSpacing = d;
+        }
+      }
+      if (minSpacing > 0 && isFinite(minSpacing)) {
+        // Match the BTES display spacing: inflate so the nearest-neighbour gap
+        // looks like a BTES park of the same size at the standard zoom.
+        const n = boreholes.length;
+        const displaySpacing = Math.max(PARK_WELL_RADIUS * 3, minSpacing * (n > 20 ? 4 : 6));
+        state.fieldDisplayScale = displaySpacing / minSpacing;
+      }
+    }
+
+    map.flyTo({ center: [flyLng, flyLat], zoom: FLY_ZOOM, pitch: FLY_PITCH, duration: 1200, essential: true });
+    map.triggerRepaint();
+  }
+
   function update(params: Record<string, number>): void {
     if (!state.active || !state.params) return;
     Object.assign(state.params, params);
@@ -437,5 +542,5 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     map.triggerRepaint();
   }
 
-  return { show, update, remove };
+  return { show, showField, update, remove };
 }

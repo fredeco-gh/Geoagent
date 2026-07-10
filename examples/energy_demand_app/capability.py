@@ -1898,6 +1898,110 @@ def _fimbul_validation_png(
     return base64.b64encode(buf.read()).decode()
 
 
+def _make_show_borehole_field_tool(session: Session):
+    @tool
+    async def show_borehole_field(  # noqa: PLR0913
+        N_1: int = 1,
+        N_2: int = 1,
+        B: float = 5.0,
+        H: float = 200.0,
+        D: float = 0.5,
+        r_b: float = 0.065,
+        tilt: float = 0.0,
+        orientation: float = 0.0,
+        pattern: str = "rectangular",
+        num_sectors: int | None = None,
+        overrides: dict[str, dict[str, dict]] | None = None,
+    ) -> str:
+        """Visualize a borehole field on the geothermal map at the selected building's location.
+
+        Shows each borehole as a 3D cylinder at its actual (x, y) position relative
+        to the building, with depth H rendered as the cylinder height. This is the same
+        visual style as clicking a well on the map. Only the field geometry matters here
+        — thermal parameters (k_s, COP, etc.) are not used.
+
+        The visualization replaces any previous field shown by this tool and disappears
+        automatically when the user clicks another building or well on the map.
+
+        Requires a building to be selected first (demand data must be available).
+
+        Args:
+            N_1: Number of boreholes in the x direction for pattern = "rectangular";
+            else, total number of boreholes. Default 1.
+            N_2: Number of boreholes in the y direction for pattern = "rectangular".
+            If pattern = "polygonal", number of polygon sides. Default 1.
+            B: Borehole centre-to-centre spacing [m]. Default 5.
+            H: Active borehole depth [m]. Default 200.
+            D: Buried depth to top of active section [m]. Default 0.5.
+            r_b: Borehole radius [m]. Default 0.065.
+            tilt: Borehole tilt from vertical [radians]. Default 0.
+            orientation: Azimuthal direction of tilt [radians]. Default 0.
+            pattern: Layout pattern — "rectangular", "sunflower", "circular", or
+            "polygonal". Default "rectangular".
+            num_sectors: Number of hydraulic sectors. Defaults to the total number
+            of boreholes. Does not affect the visualization, but determines how
+            overrides are indexed (sector then well within sector).
+            overrides: Per-borehole parameter changes (same format as
+            run_borehole_simulation). dx/dy shift a borehole relative to its
+            pattern position; H overrides its individual display depth.
+        """
+        from backend_building_selection import get_session_demand_data
+        from pygfunction_sim import (
+            rectangle_field,
+            sunflower_field,
+            circular_field,
+            polygonal_field,
+        )
+
+        demand = get_session_demand_data(session.session_id)
+        if demand is None:
+            return (
+                "No building is selected. Click a building on the map and use "
+                "'Generate energy demands' before calling this tool."
+            )
+
+        lat = demand.get("lat")
+        lon = demand.get("lon")
+        if lat is None or lon is None:
+            return "Building location (lat/lon) is not available in the current demand data."
+
+        if pattern == "rectangular":
+            boreholes = rectangle_field(N_1, N_2, B, H, D, r_b, tilt, orientation, num_sectors)
+        elif pattern == "sunflower":
+            boreholes = sunflower_field(N_1, B, H, D, r_b, tilt, orientation, num_sectors)
+        elif pattern == "circular":
+            boreholes = circular_field(N_1, B, H, D, r_b, tilt, orientation, num_sectors)
+        elif pattern == "polygonal":
+            boreholes = polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation, num_sectors)
+        else:
+            return (
+                f"Unknown pattern {pattern!r}. "
+                "Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
+            )
+
+        boreholes = _apply_overrides(boreholes, overrides)
+
+        borehole_positions = [
+            {"x": float(b.x), "y": float(b.y), "H": float(b.H)}
+            for sector in boreholes
+            for b in sector
+        ]
+        n_total = len(borehole_positions)
+
+        _ensure_map_pinned(session)
+        session.trace.append(
+            "ui",
+            {
+                "action": "show_borehole_field",
+                "payload": {"lat": lat, "lon": lon, "boreholes": borehole_positions},
+                "target": _MAP_TARGET,
+            },
+        )
+        return f"Visualized {n_total} borehole(s) at the selected building ({lat:.5f}, {lon:.5f})."
+
+    return show_borehole_field
+
+
 def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
     from jutul_agent.agent.tools import _capture_delta_writer
 
@@ -2211,6 +2315,12 @@ _PROMPT_FRAGMENT = (
     "sidebar also has a 'Setup Simulation' button that resolves and runs these "
     "directly (bypassing you) for a selected well — if they used it, you'll "
     "learn about the completed run the same way as any other UI event.\n\n"
+    "Call `show_borehole_field` to visualize a borehole field on the map at the "
+    "selected building's location, showing each borehole as a 3D cylinder at its "
+    "actual position. Use it whenever the user wants to see a field layout — "
+    "before or after running a simulation, or to compare different configurations. "
+    "It takes the same geometry parameters as `run_borehole_simulation` and `run_fimbul_validation`. "
+    "The visualization disappears when the user clicks another building or well.\n\n"
     "Call `run_borehole_simulation` to run a single pygfunction borehole heat "
     "exchanger simulation on the heating demands most recently generated via the "
     "'Generate energy demands' button. Use this for a single configuration. "
@@ -2266,6 +2376,7 @@ def geothermal_map_capability(
             lambda session: _make_run_simulation_tool(session, simulation_jl_path),
             lambda session: _make_view_simulation_result_tool(session, simulation_jl_path),
             _make_run_borehole_simulation_tool,
+            _make_show_borehole_field_tool,
             _make_sweep_borehole_parameters_tool,
             _make_plot_borehole_temperatures_tool,
             _make_plot_borehole_gfunction_tool,
