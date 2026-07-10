@@ -653,10 +653,14 @@ def simulate_borehole_temperatures(
     time_req = LoadAgg.get_times_for_simulation()
 
     # -- g-function --
+    # 'equivalent' is fastest but only handles vertical boreholes; fall back to
+    # 'similarities' when any borehole has a non-zero tilt.
+    method = "similarities" if any(b.tilt != 0.0 for b in boreholes_gt) else "equivalent"
     gFunc = gt.gfunction.gFunction(
         boreholes_gt,
         ground.alpha,
         time=time_req,
+        method=method,
         options={"nSegments": 8},
     )
     LoadAgg.initialize(gFunc.gFunc / (2.0 * np.pi * ground.k_s))

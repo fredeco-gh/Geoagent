@@ -1679,7 +1679,7 @@ def _make_plot_borehole_temperatures_tool(session: Session):
     async def plot_borehole_temperatures() -> str:
         """Plot T_in and T_out vs time from the most recent borehole simulation.
 
-        Opens a chart in a dedicated canvas tab. Call run_borehole_simulation first.
+        Opens a chart in a dedicated canvas tab that the user can see. Call run_borehole_simulation first.
         """
         result = _session_borehole_results.get(session.session_id)
         if result is None:
@@ -1712,7 +1712,7 @@ def _make_plot_borehole_gfunction_tool(session: Session):
     async def plot_borehole_gfunction() -> str:
         """Plot the g-function vs ln(t) for the borehole field from the most recent simulation.
 
-        Opens a chart in a dedicated canvas tab. Call run_borehole_simulation first.
+        Opens a chart in a dedicated canvas tab that the user can see. Call run_borehole_simulation first.
         """
         result = _session_borehole_results.get(session.session_id)
         if result is None:
@@ -1799,10 +1799,11 @@ def _borehole_gfunction_png(gfunc_time_s: list[float], gfunc_vals: list[float]) 
 def _make_view_borehole_temperatures_tool(session: Session):
     @tool
     async def view_borehole_temperatures() -> str | list[dict[str, Any]]:
-        """Show a T_in / T_out vs time plot from the most recent borehole simulation.
+        """View a T_in / T_out vs time plot from the most recent borehole simulation.
 
         Returns an image you can actually see, plus key statistics including
         monthly averages and freezing-risk hours. Call run_borehole_simulation first.
+        Use plot_borehole_temperatures to show the plot to the user. 
         """
         from datetime import datetime
 
@@ -1861,10 +1862,10 @@ def _make_view_borehole_temperatures_tool(session: Session):
 def _make_view_borehole_gfunction_tool(session: Session):
     @tool
     async def view_borehole_gfunction() -> str | list[dict[str, Any]]:
-        """Show a g-function vs ln(t) plot from the most recent borehole simulation.
+        """View a g-function vs ln(t) plot from the most recent borehole simulation.
 
         Returns an image you can actually see, plus key g values. Call
-        run_borehole_simulation first.
+        run_borehole_simulation first. Use plot_borehole_gfunction to show the plot to the user. 
         """
         result = _session_borehole_results.get(session.session_id)
         if result is None:
@@ -2023,7 +2024,13 @@ def _make_show_borehole_field_tool(session: Session):
         boreholes = _apply_overrides(boreholes, overrides)
 
         borehole_positions = [
-            {"x": float(b.x), "y": float(b.y), "H": float(b.H)}
+            {
+                "x": float(b.x),
+                "y": float(b.y),
+                "H": float(b.H),
+                "tilt": float(b.tilt),
+                "orientation": float(b.orientation),
+            }
             for sector in boreholes
             for b in sector
         ]
@@ -2365,12 +2372,12 @@ _PROMPT_FRAGMENT = (
     "Call `run_borehole_simulation` to run a single pygfunction borehole heat "
     "exchanger simulation on the heating demands most recently generated via the "
     "'Generate energy demands' button. Use this for a single configuration. "
-    "After a successful simulation, call `view_borehole_temperatures` to see "
-    "a T_in/T_out vs time plot (returns an image you can read and describe, "
-    "plus monthly averages and freezing-risk statistics), or "
-    "`view_borehole_gfunction` to see a g-function vs ln(t) plot. "
-    "Use `plot_borehole_temperatures` or `plot_borehole_gfunction` only when "
-    "the user explicitly asks to open a chart in the canvas tab.\n\n"
+    "After a successful simulation, use `plot_borehole_temperatures` or "
+    "`plot_borehole_gfunction` to show/visualize a T_in/T_out vs time plot or a g-function vs time plot, " \
+    "respectively. The charts are displayed in the canvas tab. Use `view_borehole_temperatures` to view the "
+    "T_in/T_out vs time plot yourself (returns an image you can read and describe, "
+    "plus monthly averages and freezing-risk statistics). Simlarly, `view_borehole_gfunction` "
+    "allows you to view and read the g-function vs ln(t) plot. \n\n"
     "Call `sweep_borehole_parameters` only when the user explicitly asks to "
     "explore or optimise over multiple borehole configurations at once (e.g. "
     "varying depth, number of boreholes, or ground properties). Each parameter "

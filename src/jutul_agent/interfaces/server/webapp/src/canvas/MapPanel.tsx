@@ -728,7 +728,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         const { lat, lon, boreholes } = payload as {
           lat: number;
           lon: number;
-          boreholes: Array<{ x: number; y: number; H: number }>;
+          boreholes: Array<{ x: number; y: number; H: number; tilt?: number; orientation?: number }>;
         };
         if (typeof lon === "number" && typeof lat === "number" && Array.isArray(boreholes)) {
           wellbore3dRef.current?.showField({ lng: lon, lat }, boreholes);
