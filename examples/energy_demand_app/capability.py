@@ -241,6 +241,56 @@ def _make_set_map_view_tool(session: Session):
     return set_map_view
 
 
+def _make_go_to_address_tool(session: Session):
+    @tool
+    async def go_to_address(address: str, zoom: float = 16.0) -> str:
+        """Fly the geothermal map to a Norwegian street address.
+
+        Resolves the address via Kartverket's address registry (Matrikkelen)
+        and moves the map to the matching location.  Use this whenever the user
+        gives a street address instead of well-number or coordinates.
+
+        Args:
+            address: Norwegian street address, e.g. "Karl Johans gate 1, Oslo".
+            zoom: Map zoom level after flying there. Default 16 (street level).
+        """
+        import httpx
+
+        url = "https://ws.geonorge.no/adresser/v1/sok"
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, params={"sok": address})
+            response.raise_for_status()
+            data = response.json()
+
+        adresser = data.get("adresser", [])
+        if not adresser:
+            return f"No address found for '{address}'. Try a more specific query."
+
+        hit = adresser[0]
+        punkt = hit["representasjonspunkt"]
+        lat = punkt["lat"]
+        lon = punkt["lon"]
+        resolved = ", ".join(filter(None, [
+            hit.get("adressetekst"),
+            hit.get("postnummer"),
+            hit.get("poststed"),
+            hit.get("kommunenavn"),
+        ]))
+
+        _ensure_map_pinned(session)
+        session.trace.append(
+            "ui",
+            {
+                "action": "set_map_view",
+                "payload": {"lon": lon, "lat": lat, "zoom": zoom},
+                "target": _MAP_TARGET,
+            },
+        )
+        return f"Moved the map to {resolved} ({lat:.5f}, {lon:.5f})."
+
+    return go_to_address
+
+
 def _make_go_to_well_tool(session: Session, data_path: str):
     @tool
     async def go_to_well(identifier: str) -> str:
@@ -2349,7 +2399,10 @@ def _make_view_fimbul_validation_tool(session: Session):
 _PROMPT_FRAGMENT = (
     "This app shows a map of Norwegian borehole data next to the chat (it "
     "appears the first time you use one of the tools below). Call "
-    "`set_map_view` to fly it to a raw location, `go_to_well` to fly to and "
+    "`set_map_view` to fly it to a raw location, `go_to_address` to fly to a "
+    "Norwegian street address (it resolves the address via Kartverket and moves "
+    "the map automatically — use this whenever the user gives an address rather "
+    "than a well number or coordinates), `go_to_well` to fly to and "
     "select a specific well by its number or other identifying text, or "
     "`go_to_well_park` to do the same for a well park itself (e.g. when asked "
     "about a BTES site as a whole, not one of its individual wells) — both "
@@ -2420,6 +2473,7 @@ def geothermal_map_capability(
         name="geothermal-map",
         tools=(
             _make_set_map_view_tool,
+            _make_go_to_address_tool,
             lambda session: _make_go_to_well_tool(session, data_path),
             lambda session: _make_go_to_well_park_tool(session, data_path),
             lambda session: _make_run_simulation_tool(session, simulation_jl_path),
