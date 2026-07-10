@@ -2028,6 +2028,7 @@ def _make_show_borehole_field_tool(session: Session):
                 "x": float(b.x),
                 "y": float(b.y),
                 "H": float(b.H),
+                "D": float(b.D),
                 "tilt": float(b.tilt),
                 "orientation": float(b.orientation),
             }

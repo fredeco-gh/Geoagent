@@ -291,6 +291,7 @@ export interface BoreholePos {
   x: number;
   y: number;
   H: number;
+  D?: number;           // buried depth from surface to top of active section [m] (default 0.5)
   tilt?: number;        // radians from vertical (0 = vertical)
   orientation?: number; // azimuthal direction of tilt [radians], 0 = +x (east)
 }
@@ -320,22 +321,23 @@ function buildFieldVertices(
     const tilt = bh.tilt ?? 0;
     const orientation = bh.orientation ?? 0;
     const sinT = Math.sin(tilt);
-    const cosT = Math.cos(tilt);
     const hx = bh.H * sinT * Math.cos(orientation) * scale; // actual metres, not inflated
     const hy = bh.H * sinT * Math.sin(orientation) * scale;
 
-    const depth = bh.H;
-    const vertH = depth * cosT; // vertical component of borehole length
-    const nSeg = Math.max(MIN_SEGMENTS, Math.min(Math.round(depth / 20), MAX_SEGMENTS));
-    const segTotal = vertH / nSeg;
+    const H = bh.H;
+    const D = bh.D ?? 0.5;
+
+    // Subtract D from the starting z so a larger D shifts the whole column downward —
+    // the active section runs from z=base-D (deep end) to z=base-D+H (top of active section).
+    const nSeg = Math.max(MIN_SEGMENTS, Math.min(Math.round(H / 20), MAX_SEGMENTS));
+    const segTotal = H / nSeg;
     const segHeight = segTotal * (1 - SEGMENT_GAP_FRAC);
 
-    let curZ = base;
+    let curZ = base - D;
     for (let i = 0; i < nSeg; i++) {
-      // Interpolate lateral position along the borehole axis (midpoint of each segment).
       const t_mid = (i + 0.5) / nSeg;
-      const cx = cx_top + t_mid * hx;
-      const cy = cy_top - t_mid * hy;
+      const cx = cx_top + (1 - t_mid) * hx;
+      const cy = cy_top - (1 - t_mid) * hy;
       const t = nSeg > 1 ? i / (nSeg - 1) : 0.5;
       const col = depthColor(t);
       const z0 = curZ * scale * progress;
@@ -344,13 +346,11 @@ function buildFieldVertices(
       curZ += segTotal;
     }
 
-    const capH = Math.max(depth * CAP_HEIGHT_FRAC, 3);
-    const capZ0 = (base + vertH) * scale * progress;
-    const capZ1 = (base + vertH + capH) * scale * progress;
-    // Cap placed at the borehole's bottom position (offset from top by tilt displacement).
-    const cx_bot = cx_top + hx;
-    const cy_bot = cy_top - hy;
-    if (capZ1 > capZ0 + 1e-12) addCappedCylinder(verts, cx_bot, cy_bot, capZ0, capZ1, baseRadius * 1.25, CAP_COLOR, 1.0);
+    // Cap at the top of the active section (base-D+H); goes lower as D increases.
+    const capH = Math.max(H * CAP_HEIGHT_FRAC, 3);
+    const capZ0 = (base - D + H) * scale * progress;
+    const capZ1 = (base - D + H + capH) * scale * progress;
+    if (capZ1 > capZ0 + 1e-12) addCappedCylinder(verts, cx_top, cy_top, capZ0, capZ1, baseRadius * 1.25, CAP_COLOR, 1.0);
   }
 
   return new Float32Array(verts);
