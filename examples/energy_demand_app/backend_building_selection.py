@@ -394,6 +394,172 @@ def get_building_info_from_wfs_click(
     )
 
 
+def _parse_building_gml(content: bytes, bygningsnummer: str, epsg: int) -> BuildingInfo | None:
+    """Parse a WFS GML response and return the BuildingInfo for the requested number.
+
+    Returns None if the response is empty, unparseable, or contains no feature
+    whose building number column matches *bygningsnummer*.
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".gml", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        gdf = gpd.read_file(tmp_path)
+    except Exception as exc:
+        print(f"[WFS] failed to parse building lookup response: {exc}")
+        return None
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    if gdf.empty:
+        return None
+
+    gdf = gdf.set_crs(epsg=epsg) if gdf.crs is None else gdf.to_crs(epsg=epsg)
+
+    col_nr = _first_column(
+        gdf,
+        ["bygningsnummer", "bygningsnr", "bygningnummer", "byggnr",
+         "BYGGNR", "bygningsNummer", "bygning_nummer"],
+    )
+    # If server-side filtering worked we have exactly one row; otherwise filter
+    # client-side to find the row whose building number matches.
+    if col_nr is not None:
+        mask = gdf[col_nr].astype(str) == str(bygningsnummer)
+        gdf = gdf[mask]
+        if gdf.empty:
+            return None
+
+    gdf_wgs84 = gdf.to_crs("EPSG:4326")
+    row = gdf.iloc[0]
+    point = gdf_wgs84.iloc[0].geometry.centroid
+
+    col_type = _first_column(
+        gdf, ["bygningstype", "bygningstypekode", "byggtype", "BYGGTYP_NBR", "bygningstypeKode"]
+    )
+    col_status = _first_column(
+        gdf, ["bygningsstatus", "bygningstatus", "byggstatus", "BYGGSTAT", "bygningsstatusKode"]
+    )
+    col_kommnr = _first_column(gdf, ["kommunenummer", "kommunenr", "kommune_nr", "KOMM"])
+    col_kommnm = _first_column(gdf, ["kommunenavn", "kommune", "kommune_navn"])
+
+    def _str(col: str | None) -> str | None:
+        if col is None or col not in row.index or pd.isna(row[col]):
+            return None
+        return str(row[col])
+
+    raw_type = _str(col_type)
+    try:
+        type_kode = int(raw_type) if raw_type is not None else None
+    except (ValueError, TypeError):
+        type_kode = None
+
+    type_map = get_building_type_codelist()
+    return BuildingInfo(
+        bygningsnummer=_str(col_nr) or bygningsnummer,
+        bygningstype=get_building_type_name(raw_type, type_map),
+        bygningstype_kode=type_kode,
+        bygningsstatus=_str(col_status),
+        kommunenummer=_str(col_kommnr),
+        kommunenavn=_str(col_kommnm),
+        lat=float(point.y),
+        lon=float(point.x),
+        distance_m=0.0,
+    )
+
+
+def fetch_building_by_number(
+    bygningsnummer: str,
+    epsg: int = DEFAULT_EPSG,
+) -> BuildingInfo | None:
+    """Look up a single building by its bygningsnummer in the Matrikkelen WFS.
+
+    Tries three strategies in order:
+    1. FEATUREID lookup (WFS 2.0 standard, most reliable).
+    2. CQL_FILTER (fast if supported by the server).
+    3. OGC XML Filter (standard fallback, no count limit so may be slow).
+
+    Returns None if no matching building is found or the WFS is unavailable.
+    """
+    caps = _get_wfs_capabilities()
+    type_name = caps["typename"] or get_wfs_typename()
+    base_params: dict[str, str] = {
+        "service": "WFS",
+        "version": "2.0.0",
+        "request": "GetFeature",
+        "srsName": f"EPSG:{epsg}",
+    }
+    if ":" in type_name and caps["ns_uri"]:
+        prefix = type_name.split(":")[0]
+        base_params["namespaces"] = f"xmlns({prefix},{caps['ns_uri']})"
+
+    def _get_gml(extra: dict[str, str]) -> bytes | None:
+        params = {**base_params, **extra}
+        try:
+            r = requests.get(WFS_BASE_URL, params=params, timeout=60)
+        except Exception as exc:
+            print(f"[WFS] request failed: {exc}")
+            return None
+        if not r.ok or not r.content:
+            return None
+        snippet = r.content[:500].decode("utf-8", errors="replace")
+        if "ExceptionReport" in snippet or "ServiceException" in snippet:
+            print(f"[WFS] server exception for {extra}: {snippet[:300]}")
+            return None
+        return r.content
+
+    # Strategy 1: FEATUREID — WFS 2.0 fetches a feature by its GML @gml:id.
+    # Matrikkelen uses the pattern "<prefix>:Bygning.<bygningsnummer>".
+    type_local = type_name.split(":")[-1]  # e.g. "Bygning" from "app:Bygning"
+    prefix = type_name.split(":")[0] if ":" in type_name else ""
+    for fid in (
+        f"{prefix}:{type_local}.{bygningsnummer}" if prefix else None,
+        f"{type_local}.{bygningsnummer}",
+    ):
+        if fid is None:
+            continue
+        content = _get_gml({"FEATUREID": fid})
+        if content:
+            result = _parse_building_gml(content, bygningsnummer, epsg)
+            if result is not None:
+                return result
+
+    # Strategy 2: CQL_FILTER — fast attribute filter (not all servers support it).
+    content = _get_gml({
+        "typeNames": type_name,
+        "CQL_FILTER": f"bygningsnummer='{bygningsnummer}'",
+        "count": "100",
+    })
+    if content:
+        result = _parse_building_gml(content, bygningsnummer, epsg)
+        if result is not None:
+            return result
+
+    # Strategy 3: OGC XML Filter — standard WFS 2.0 attribute query.
+    filter_xml = (
+        "<Filter>"
+        "<PropertyIsEqualTo>"
+        "<ValueReference>bygningsnummer</ValueReference>"
+        f"<Literal>{bygningsnummer}</Literal>"
+        "</PropertyIsEqualTo>"
+        "</Filter>"
+    )
+    content = _get_gml({
+        "typeNames": type_name,
+        "FILTER": filter_xml,
+        "count": "100",
+    })
+    if content:
+        result = _parse_building_gml(content, bygningsnummer, epsg)
+        if result is not None:
+            return result
+
+    return None
+
+
+
 @router.get("/api/building-click", response_model=BuildingClickResponse)
 def api_building_click(
     lat: float = Query(...),

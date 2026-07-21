@@ -740,6 +740,12 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         } else {
           setEnergyStatus(null);
         }
+      } else if (action === "select_building") {
+        const building = payload as unknown as SelectedBuilding;
+        if (typeof building?.lon === "number" && typeof building?.lat === "number") {
+          map.flyTo({ center: [building.lon, building.lat], zoom: 17 });
+          setSelectedBuilding(building);
+        }
       }
     }
   }, [uiActions]);

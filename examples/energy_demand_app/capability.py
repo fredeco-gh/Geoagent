@@ -1385,6 +1385,20 @@ def _make_run_borehole_simulation_tool(session: Session):
             "gfunc_vals": gfunc_vals.tolist(),
         }
 
+        T_in_daily, _ = _aggregate_tin_profile(T_in, window_hours=24)
+        below_zero_days = [i + 1 for i, t in enumerate(T_in_daily) if t < 0.0]
+        if below_zero_days:
+            if len(below_zero_days) <= 30:
+                below_zero_str = f"days {', '.join(map(str, below_zero_days))}"
+            else:
+                below_zero_str = (
+                    f"days {below_zero_days[0]}–{below_zero_days[-1]} "
+                    f"({len(below_zero_days)} days total)"
+                )
+            below_zero_note = f"WARNING: {len(below_zero_days)} daily-avg T_in period(s) below 0 °C: {below_zero_str}\n"
+        else:
+            below_zero_note = "All daily-avg T_in periods are above 0 °C.\n"
+
         return (
             f"Borehole simulation completed: {n} hourly timesteps, "
             f"{len(boreholes)} borehole(s), depth {H} m.\n"
@@ -1392,6 +1406,7 @@ def _make_run_borehole_simulation_tool(session: Session):
             f"mean {sum(T_in)/n:.1f} °C\n"
             f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
             f"mean {sum(T_out)/n:.1f} °C\n"
+            + below_zero_note +
             "Use plot_borehole_temperatures or plot_borehole_gfunction if the "
             "user wants to visualise the results."
         )
@@ -2261,6 +2276,26 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         T_surface = fetch_mean_surface_temperature(demand["lat"], demand["lon"])
         fluid = FluidParams()
         fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
+        freeze_point_C = fl.fluid.t_min
+
+        below_freeze_days = [i + 1 for i, t in enumerate(T_in_avg) if t < freeze_point_C]
+        if below_freeze_days:
+            if len(below_freeze_days) <= 30:
+                days_str = ", ".join(map(str, below_freeze_days))
+            else:
+                days_str = (
+                    f"{below_freeze_days[0]}–{below_freeze_days[-1]} "
+                    f"({len(below_freeze_days)} days total)"
+                )
+            return (
+                f"Cannot run Fimbul validation: the prescribed inlet temperature "
+                f"drops below the freezing point of the working fluid "
+                f"({freeze_point_C:.1f} °C for {fluid.fluid_name}) "
+                f"on {len(below_freeze_days)} day(s): {days_str}. "
+                f"This is a physically unrealisable configuration — the fluid would "
+                f"freeze in the boreholes. Consider increasing the number of boreholes, "
+                f"reducing the depth, or lowering the heating demand."
+            )
 
         setup = {
             "field": boreholes_to_fimbul_field(boreholes),
@@ -2422,6 +2457,50 @@ def _make_view_fimbul_validation_tool(session: Session):
     return view_fimbul_validation
 
 
+def _make_go_to_building_tool(session: Session):
+    @tool
+    async def go_to_building(bygningsnummer: str) -> str:
+        """Fly the geothermal map to a specific building and select it.
+
+        Looks up the building by its Norwegian building number (bygningsnummer)
+        in the Matrikkelen WFS and moves the map to its location, exactly as if
+        the user had clicked it on the map.
+
+        Args:
+            bygningsnummer: The Norwegian building number to look up (e.g. "12345678").
+        """
+        import asyncio as _asyncio
+
+        from backend_building_selection import fetch_building_by_number
+
+        try:
+            building = await _asyncio.get_event_loop().run_in_executor(
+                None, fetch_building_by_number, bygningsnummer
+            )
+        except Exception as exc:
+            return f"Could not look up building {bygningsnummer}: {exc}"
+
+        if building is None:
+            return f"No building with number '{bygningsnummer}' found in Matrikkelen."
+
+        _ensure_map_pinned(session)
+        session.trace.append(
+            "ui",
+            {
+                "action": "select_building",
+                "payload": building.model_dump(),
+                "target": _MAP_TARGET,
+            },
+        )
+        parts = [f"Building {building.bygningsnummer}"]
+        if building.bygningstype:
+            parts.append(building.bygningstype)
+        if building.kommunenavn:
+            parts.append(building.kommunenavn)
+        return f"Moved the map to {', '.join(parts)} ({building.lat:.5f}, {building.lon:.5f})."
+
+    return go_to_building
+
 
 _PROMPT_FRAGMENT = (
     "This app shows a map of Norwegian borehole data next to the chat (it "
@@ -2429,13 +2508,16 @@ _PROMPT_FRAGMENT = (
     "`set_map_view` to fly it to a raw location, `go_to_address` to fly to a "
     "Norwegian street address (it resolves the address via Kartverket and moves "
     "the map automatically — use this whenever the user gives an address rather "
-    "than a well number or coordinates), `go_to_well` to fly to and "
+    "than a well number or coordinates), `go_to_building` to fly to and select "
+    "a specific building by its Norwegian building number (bygningsnummer) — it "
+    "queries Matrikkelen directly and selects the building exactly as if the user "
+    "had clicked it, `go_to_well` to fly to and "
     "select a specific well by its number or other identifying text, or "
     "`go_to_well_park` to do the same for a well park itself (e.g. when asked "
     "about a BTES site as a whole, not one of its individual wells) — both "
     "tell you directly if no such well/park exists, so trust their return "
     "value rather than assuming success. The user can also click things on "
-    "the map themselves (e.g. selecting a well); when they do, a note "
+    "the map themselves (e.g. selecting a well or building); when they do, a note "
     "describing it is prepended to their next message as '[UI events since "
     "your last message]', so you'll see it as part of what they sent.\n\n"
     "Call `run_simulation` to run a Fimbul geothermal simulation (an AGS or "
@@ -2501,6 +2583,7 @@ def geothermal_map_capability(
         tools=(
             _make_set_map_view_tool,
             _make_go_to_address_tool,
+            _make_go_to_building_tool,
             lambda session: _make_go_to_well_tool(session, data_path),
             lambda session: _make_go_to_well_park_tool(session, data_path),
             lambda session: _make_run_simulation_tool(session, simulation_jl_path),
