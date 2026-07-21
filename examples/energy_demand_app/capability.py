@@ -96,6 +96,10 @@ _borehole_sim_run_count: dict[str, int] = {}
 # view_fimbul_validation plot tool without re-running the simulation.
 _session_fimbul_validation_results: dict[str, dict] = {}
 
+# Per-session count of Fimbul validation runs; each run gets its own slot so
+# validation tabs accumulate instead of overwriting each other.
+_fimbul_validation_run_count: dict[str, int] = {}
+
 
 def _aggregate_tin_profile(
     T_in: list[float],
@@ -2375,7 +2379,9 @@ def _make_view_fimbul_validation_tool(session: Session):
             f'<img src="data:image/png;base64,{b64}">'
             "</body></html>"
         )
-        rel = "artifacts/fimbul-validation.html"
+        run_no = _fimbul_validation_run_count.get(session.session_id, 0) + 1
+        _fimbul_validation_run_count[session.session_id] = run_no
+        rel = f"artifacts/fimbul-validation-{run_no}.html"
         out = session.output_dir / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(html, encoding="utf-8")
@@ -2385,9 +2391,9 @@ def _make_view_fimbul_validation_tool(session: Session):
                 "path": rel,
                 "mime": "text/html",
                 "format": "html",
-                "caption": "Fimbul validation",
+                "caption": f"Fimbul validation #{run_no}",
                 "kind": "report",
-                "slot": "fimbul-validation",
+                "slot": f"fimbul-validation-{run_no}",
             },
         )
 
@@ -2397,7 +2403,7 @@ def _make_view_fimbul_validation_tool(session: Session):
         rmse = math.sqrt(sum(d ** 2 for d in diffs) / n)
 
         stats = (
-            f"{n} windows of {wh} h  (COP={COP})\n"
+            f"{n} time windows of {wh} h  (COP={COP})\n"
             f"T_in:  min {min(T_in_C):.2f} °C  max {max(T_in_C):.2f} °C  "
             f"mean {sum(T_in_C)/n:.2f} °C\n"
             f"T_out: min {min(T_out_C):.2f} °C  max {max(T_out_C):.2f} °C  "
@@ -2406,7 +2412,7 @@ def _make_view_fimbul_validation_tool(session: Session):
             f"Total heating demand:        {sum(demand_kWh_windowed):.0f} kWh\n"
             f"Mean difference (Fimbul − needs): {mean_diff:+.2f} kWh/window\n"
             f"RMSE (Fimbul vs needs):           {rmse:.2f} kWh/window\n"
-            f"Periods with negative extraction: {sum(1 for e in energy_kWh if e < 0)}"
+            f"Time windows with negative extraction: {sum(1 for e in energy_kWh if e < 0)}"
         )
         return [
             {"type": "text", "text": stats},
