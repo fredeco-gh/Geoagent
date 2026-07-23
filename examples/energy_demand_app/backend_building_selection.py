@@ -886,7 +886,23 @@ def make_generate_energy_demands_action():
                 "demand_kw": df_demand[demand_col].tolist(),
                 "lat": lat,
                 "lon": lon,
+                "bygningsnummer": bygningsnummer,
+                "year": year,
+                "demand_type": demand_type,
             }
+            # The model wasn't involved in this action, so fold a note into
+            # whatever the user sends next so the agent knows which building's
+            # demand data is now loaded (same mechanism as well clicks and
+            # simulationCompleted in make_run_simulation_action).
+            _queue_ui_event(
+                {
+                    "event": "HeatingNeedsGenerated",
+                    "bygningsnummer": bygningsnummer,
+                    "year": year,
+                    "demand_type": demand_type,
+                    "n_hours": len(df_demand),
+                }
+            )
 
             html = _build_energy_demand_report_html(
                 bygningsnummer, year, demand_type, records

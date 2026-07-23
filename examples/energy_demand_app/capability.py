@@ -1405,7 +1405,13 @@ def _make_run_borehole_simulation_tool(session: Session):
         else:
             below_zero_note = "All daily-avg T_in periods are above 0 °C.\n"
 
+        building_tag = (
+            f"Building #{demand['bygningsnummer']} ({demand['demand_type']}, {demand['year']})\n"
+            if demand.get("bygningsnummer")
+            else ""
+        )
         return (
+            f"{building_tag}"
             f"Borehole simulation completed: {n} hourly timesteps, "
             f"{len(boreholes)} borehole(s), depth {H} m.\n"
             f"T_in:  min {min(T_in):.1f} °C  max {max(T_in):.1f} °C  "
@@ -2537,6 +2543,13 @@ _PROMPT_FRAGMENT = (
     "before or after running a simulation, or to compare different configurations. "
     "It takes the same geometry parameters as `run_borehole_simulation` and `run_fimbul_validation`. "
     "The visualization disappears when the user clicks another building or well.\n\n"
+    "Important: clicking a building on the map and generating its heating needs "
+    "are two separate steps. Clicking only selects the building — no simulation "
+    "data exists yet. The user must then click 'Generate heating needs' before "
+    "any simulation can run. Only one building's needs data is held at a time; "
+    "generating for a new building replaces the previous one entirely. If the user "
+    "asks to simulate a building they have selected but not yet generated heating needs "
+    "for, tell them to click 'Generate heating needs' for it first.\n\n"
     "Call `run_borehole_simulation` to run a single pygfunction borehole heat "
     "exchanger simulation on the heating demands most recently generated via the "
     "'Generate energy demands' button. Use this for a single configuration. "

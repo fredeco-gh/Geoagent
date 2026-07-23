@@ -666,6 +666,13 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         setSelectedBuilding(result.selected);
         setCollapsed(false);
         startTemperatureFetch(result.selected.lat, result.selected.lon);
+        onUiEvent({
+          event: "buildingSelected",
+          bygningsnummer: result.selected.bygningsnummer,
+          bygningstype: result.selected.bygningstype ?? null,
+          lat: result.selected.lat,
+          lon: result.selected.lon,
+        });
       });
     });
 
