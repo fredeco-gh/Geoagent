@@ -1319,15 +1319,20 @@ def _make_run_borehole_simulation_tool(session: Session):
         import pandas as pd
 
         from backend_building_selection import get_session_demand_data
+        import pygfunction as gt
         from pygfunction_sim import (
+            FluidParams,
             GroundParams,
             PipeParams,
             rectangle_field,
             sunflower_field,
-            circular_field, 
+            circular_field,
             polygonal_field,
             simulate_borehole_temperatures,
         )
+
+        _default_fluid = FluidParams()
+        freeze_point_C = gt.media.Fluid(_default_fluid.fluid_name, _default_fluid.concentration).fluid.t_min
 
         demand = get_session_demand_data(session.session_id)
         if demand is None:
@@ -1383,6 +1388,7 @@ def _make_run_borehole_simulation_tool(session: Session):
             "T_out": T_out,
             "gfunc_time": gfunc_time.tolist(),
             "gfunc_vals": gfunc_vals.tolist(),
+            "freeze_point_C": freeze_point_C,
         }
 
         T_in_daily, _ = _aggregate_tin_profile(T_in, window_hours=24)
@@ -1882,10 +1888,10 @@ def _make_view_borehole_temperatures_tool(session: Session):
         T_in: list[float] = result["T_in"]
         T_out: list[float] = result["T_out"]
         timestamps: list[str] = result["timestamps"]
+        freeze_point_C: float = result.get("freeze_point_C", 0.0)
         n = len(T_in)
 
-        hours_below_0 = sum(1 for t in T_in if t < 0.0)
-        hours_below_2 = sum(1 for t in T_in if t < 2.0)
+        hours_below_freeze = sum(1 for t in T_in if t < freeze_point_C)
 
         month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
                        7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
@@ -1909,8 +1915,7 @@ def _make_view_borehole_temperatures_tool(session: Session):
             f"Run #{result['run_no']}, {n} hourly timesteps\n"
             f"T_in:  min {min(T_in):.2f} °C  max {max(T_in):.2f} °C  mean {sum(T_in)/n:.2f} °C\n"
             f"T_out: min {min(T_out):.2f} °C  max {max(T_out):.2f} °C  mean {sum(T_out)/n:.2f} °C\n"
-            f"Hours T_in < 0 °C: {hours_below_0} ({100*hours_below_0/n:.1f}%)\n"
-            f"Hours T_in < 2 °C: {hours_below_2} ({100*hours_below_2/n:.1f}%)\n"
+            f"Hours T_in < {freeze_point_C:.1f} °C (freeze point): {hours_below_freeze} ({100*hours_below_freeze/n:.1f}%)\n"
             "Monthly mean T_in / T_out:\n" + "\n".join(monthly_lines)
         )
 

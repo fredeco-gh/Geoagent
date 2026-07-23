@@ -46,7 +46,7 @@ PYGSIM_JL = EXAMPLE_DIR / "julia" / "pygfunction_sim.jl"
 WORKSPACE = EXAMPLE_DIR / "workspace"
 
 HOST = "127.0.0.1"
-PORT = 8742
+PORT = 8740
 
 
 async def _host_factory(

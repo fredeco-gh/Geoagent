@@ -39,7 +39,7 @@ environment is needed beyond what that simulator already declares:
 python examples/geothermal-map/serve.py
 ```
 
-Open <http://127.0.0.1:8742>. Try: *"go to well 12345"*, *"fly to well park ...
+Open <http://127.0.0.1:8740>. Try: *"go to well 12345"*, *"fly to well park ...
 "*, or *"move the map to longitude 10.7, latitude 59.9, zoom 12"*. The map
 panel appears in the canvas the first time you ask for one of these.
 
