@@ -254,12 +254,9 @@ runs on.
 
 ## The example app
 
-The repository includes a small, runnable example under `examples/` that
-exercises the whole interface and serves as a starting point to copy. It runs on a
-tiny test library rather than a full simulator, so it stays fast and keeps the
-focus on the wiring. Its simulator and its web capability are added through the
-extension mechanism rather than the built-in registry, which also shows how to
-bring a new simulator and front end of your own. The example covers creating a
-session, streaming a reply, a tool call, an embedded interactive plot next to the
-saved image, the user-interface round trip, and an approval round trip. Its
-`README.md` has the command to run it and notes on extending it.
+The repository includes a full-featured example app under `energy_demand_app/`
+that exercises the whole interface and serves as a starting point to copy. It
+wires a geothermal well map into jutil-agent's native canvas panel, adds
+simulation and building energy-demand capabilities, and runs on the built-in
+`fimbul` simulator. Its `README.md` has the command to run it and notes on
+extending it.

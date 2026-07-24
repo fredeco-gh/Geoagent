@@ -742,7 +742,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           const lngLat = selectedRef.current?.lngLat ?? null;
           if (lngLat) {
             if (setup.case_type === "BTES") {
-              const _H = Number(setup.parameters["well_depth"] ?? 200);
+              const _H = Number(setup.parameters["well_length"] ?? 200);
               const _D = Number(setup.parameters["borehole_start_depth"] ?? 0.5);
               const _B = Number(setup.parameters["well_spacing"] ?? 5);
               const boreholes = computeBtesBoreholes("sunflower", _nw, _nw, 1, 6, _B, _H, _D);
@@ -810,7 +810,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
   // Real-time BTES field visualization: recompute borehole positions whenever
   // the user changes the pattern, N fields, or spatial parameters (H, D, spacing).
   const _btesSpacing = simParams["well_spacing"];
-  const _btesH = simParams["well_depth"];
+  const _btesH = simParams["well_length"];
   const _btesD = simParams["borehole_start_depth"];
   useEffect(() => {
     if (!simPanelOpen || simSetup?.case_type !== "BTES") return;

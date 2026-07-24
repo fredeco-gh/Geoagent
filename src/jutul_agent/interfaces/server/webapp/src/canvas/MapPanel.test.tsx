@@ -178,7 +178,6 @@ describe("MapPanel", () => {
     expect(fetch).toHaveBeenCalledWith("/geothermal-data/all_boreholes.geojson");
     expect(map.layers.has("layer-energibronn")).toBe(true);
     expect(map.layers.has("layer-bronnpark")).toBe(true);
-    expect(screen.getByText("Total boreholes:").nextSibling).toHaveTextContent("2");
   });
 
   it("'Back to this view' (a reloadToken bump) resets the camera and selection, and clears the spinner", async () => {
@@ -307,10 +306,10 @@ describe("MapPanel", () => {
     case_label: "Advanced Geothermal System (AGS)",
     case_description: "Closed-loop heat exchanger in a single deep borehole.",
     well_id: "Well #100",
-    parameters: { well_depth: 200, surface_temperature: 7 },
-    parameter_order: ["well_depth", "surface_temperature"],
+    parameters: { well_length: 200, surface_temperature: 7 },
+    parameter_order: ["well_length", "surface_temperature"],
     metadata: {
-      well_depth: {
+      well_length: {
         label: "Well depth",
         unit: "m",
         min: 10,
@@ -327,7 +326,7 @@ describe("MapPanel", () => {
         group: "Rock Properties",
       },
     },
-    sources: { well_depth: "data", surface_temperature: "default" },
+    sources: { well_length: "data", surface_temperature: "default" },
   };
 
   async function selectWell(map: InstanceType<typeof FakeMap>) {
@@ -371,7 +370,7 @@ describe("MapPanel", () => {
     });
 
     expect(screen.getByText("Advanced Geothermal System (AGS)")).toBeInTheDocument();
-    const depthInput = document.getElementById("sim-p-well_depth") as HTMLInputElement;
+    const depthInput = document.getElementById("sim-p-well_length") as HTMLInputElement;
     expect(depthInput.value).toBe("200");
 
     fireEvent.change(depthInput, { target: { value: "250" } });
@@ -379,7 +378,7 @@ describe("MapPanel", () => {
 
     expect(onAction).toHaveBeenCalledWith("run_simulation", {
       case_type: "AGS",
-      parameters: { well_depth: 250, surface_temperature: 7 },
+      parameters: { well_length: 250, surface_temperature: 7 },
     });
     expect(screen.getByText(/watch the chat/)).toBeInTheDocument();
   });

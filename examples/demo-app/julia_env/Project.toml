@@ -1,7 +1,0 @@
-[deps]
-Bonito = "824d6782-a2ef-11e9-3a09-e5662e0c26f8"
-DemoSim = "399ba059-2ef4-46df-b0ff-fda998e6d1cf"
-WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
-
-[sources]
-DemoSim = {path = "../DemoSim"}

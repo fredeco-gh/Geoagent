@@ -236,7 +236,7 @@ function buildVertices(
   groundElevation: number,
 ): Float32Array {
   const verts: number[] = [];
-  const depth = params.well_depth || 200;
+  const depth = params.well_length || 200;
   const nSeg = Math.max(MIN_SEGMENTS, Math.min(Math.round(params.num_segments || 10), MAX_SEGMENTS));
 
   let positions: HexPos[];
