@@ -361,6 +361,8 @@ export interface Wellbore3D {
   show(lngLat: { lng: number; lat: number }, params: Record<string, number>, caseType: string | null): void;
   /** Show (or replace) a borehole field at `lngLat` using explicit positions. */
   showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[]): void;
+  /** Live-update field borehole positions without re-animating (for real-time param changes). */
+  updateField(boreholes: BoreholePos[]): void;
   /** Live-update displayed parameters (e.g. an edited depth) without re-animating. */
   update(params: Record<string, number>): void;
   /** Remove the layer; safe to call when nothing is shown. */
@@ -555,6 +557,30 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     map.triggerRepaint();
   }
 
+  function updateField(boreholes: BoreholePos[]): void {
+    if (!state.active) return;
+    state.boreholes = boreholes;
+    if (boreholes.length > 1) {
+      let minSpacing = Infinity;
+      for (let i = 0; i < boreholes.length; i++) {
+        for (let j = i + 1; j < boreholes.length; j++) {
+          const dx = boreholes[i].x - boreholes[j].x;
+          const dy = boreholes[i].y - boreholes[j].y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < minSpacing) minSpacing = d;
+        }
+      }
+      if (minSpacing > 0 && isFinite(minSpacing)) {
+        const n = boreholes.length;
+        const displaySpacing = Math.max(PARK_WELL_RADIUS * 3, minSpacing * (n > 20 ? 4 : 6));
+        state.fieldDisplayScale = displaySpacing / minSpacing;
+      }
+    }
+    state.progress = 1;
+    state.needsBuild = true;
+    map.triggerRepaint();
+  }
+
   function update(params: Record<string, number>): void {
     if (!state.active || !state.params) return;
     Object.assign(state.params, params);
@@ -563,5 +589,5 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     map.triggerRepaint();
   }
 
-  return { show, showField, update, remove };
+  return { show, showField, updateField, update, remove };
 }

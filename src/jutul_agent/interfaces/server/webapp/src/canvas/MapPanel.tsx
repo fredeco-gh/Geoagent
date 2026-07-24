@@ -18,6 +18,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./MapPanel.css";
+import { computeBtesBoreholes } from "./boreholePatterns";
 import type { PanelProps } from "./registry";
 import { useUiActions } from "./registry";
 import { createWellbore3D, type Wellbore3D } from "./wellbore3d";
@@ -734,10 +735,21 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           setSimBtesN1(_nw / _n2);
           setSimBtesN2(_n2);
           setSimBtesNumSides(6);
-          // Mirrors geothermal-viz's own simulationSetup event: show the 3D
-          // wellbore for the well the resolved params belong to.
-          const lngLat = selectedRef.current?.lngLat;
-          if (lngLat) wellbore3dRef.current?.show(lngLat, setup.parameters, setup.case_type);
+          // Show the 3D wellbore for the well the resolved params belong to.
+          // For BTES, use showField with client-computed pattern positions so
+          // subsequent real-time updates via updateField work correctly.
+          const lngLat = selectedRef.current?.lngLat ?? null;
+          if (lngLat) {
+            if (setup.case_type === "BTES") {
+              const _H = Number(setup.parameters["well_depth"] ?? 200);
+              const _D = Number(setup.parameters["borehole_start_depth"] ?? 0.5);
+              const _B = Number(setup.parameters["well_spacing"] ?? 5);
+              const boreholes = computeBtesBoreholes("sunflower", _nw, _nw, 1, 6, _B, _H, _D);
+              wellbore3dRef.current?.showField(lngLat, boreholes);
+            } else {
+              wellbore3dRef.current?.show(lngLat, setup.parameters, setup.case_type);
+            }
+          }
         } else {
           setSimSetup(null);
           setSimError("This well type does not support simulation.");
@@ -793,6 +805,23 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     setSimParams((p) => ({ ...p, [key]: value }));
     wellbore3dRef.current?.update({ [key]: value });
   };
+
+  // Real-time BTES field visualization: recompute borehole positions whenever
+  // the user changes the pattern, N fields, or spatial parameters (H, D, spacing).
+  const _btesSpacing = simParams["well_spacing"];
+  const _btesH = simParams["well_depth"];
+  const _btesD = simParams["borehole_start_depth"];
+  useEffect(() => {
+    if (!simPanelOpen || simSetup?.case_type !== "BTES") return;
+    const spacing = _btesSpacing ?? 5;
+    const H = _btesH ?? 200;
+    const D = _btesD ?? 0.5;
+    const boreholes = computeBtesBoreholes(
+      simPattern, simBtesN, simBtesN1, simBtesN2, simBtesNumSides, spacing, H, D,
+    );
+    wellbore3dRef.current?.updateField(boreholes);
+  }, [simPattern, simBtesN, simBtesN1, simBtesN2, simBtesNumSides,
+      _btesSpacing, _btesH, _btesD, simSetup?.case_type, simPanelOpen]);
 
   const handleRunSimulation = () => {
     if (!simSetup?.case_type) return;
