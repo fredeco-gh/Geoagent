@@ -807,7 +807,7 @@ end
 
 
 def make_generate_energy_demands_action():
-    """Action handler for the energy panel's 'Generate energy demands' button."""
+    """Action handler for the energy panel's 'Generate heating needs' button."""
     import uuid
     from collections.abc import Awaitable, Callable
     from typing import Any

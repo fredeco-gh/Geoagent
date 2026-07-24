@@ -337,6 +337,11 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
   const [simParams, setSimParams] = useState<Record<string, number>>({});
   const [simError, setSimError] = useState<string | null>(null);
   const [simStatus, setSimStatus] = useState<SimStatus | null>(null);
+  const [simPattern, setSimPattern] = useState<string>("sunflower");
+  const [simBtesN, setSimBtesN] = useState<number>(16);
+  const [simBtesN1, setSimBtesN1] = useState<number>(4);
+  const [simBtesN2, setSimBtesN2] = useState<number>(4);
+  const [simBtesNumSides, setSimBtesNumSides] = useState<number>(6);
 
   const [energyPanelOpen, setEnergyPanelOpen] = useState(false);
   const [energyYear, setEnergyYear] = useState(2023);
@@ -718,6 +723,17 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           setSimError(null);
           setSimSetup(setup);
           setSimParams({ ...setup.parameters });
+          setSimPattern("sunflower");
+          // Seed N fields from the well-database value so the first run
+          // uses the actual number of boreholes in the park.
+          const _nw = Math.max(1, Math.round(Number(setup.parameters["num_wells_btes"] ?? 16)));
+          setSimBtesN(_nw);
+          // Find the factor pair of _nw closest to a square (so N₁ × N₂ = _nw exactly).
+          let _n2 = Math.floor(Math.sqrt(_nw));
+          while (_n2 > 1 && _nw % _n2 !== 0) _n2--;
+          setSimBtesN1(_nw / _n2);
+          setSimBtesN2(_n2);
+          setSimBtesNumSides(6);
           // Mirrors geothermal-viz's own simulationSetup event: show the 3D
           // wellbore for the well the resolved params belong to.
           const lngLat = selectedRef.current?.lngLat;
@@ -784,7 +800,15 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
       kind: "running",
       message: "Sent to the agent — watch the chat for progress and results.",
     });
-    onAction("run_simulation", { case_type: simSetup.case_type, parameters: simParams });
+    const btesLayoutArgs =
+      simSetup.case_type === "BTES"
+        ? simPattern === "rectangular"
+          ? { pattern: simPattern, n_1: simBtesN1, n_2: simBtesN2 }
+          : simPattern === "polygonal"
+          ? { pattern: simPattern, n: simBtesN, num_sides: simBtesNumSides }
+          : { pattern: simPattern, n: simBtesN }
+        : {};
+    onAction("run_simulation", { case_type: simSetup.case_type, parameters: simParams, ...btesLayoutArgs });
   };
 
   const toggleLayer = (groupId: string, checked: boolean) => {
@@ -931,7 +955,12 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                 {groupSimParams(simSetup).map(([groupName, items]) => (
                   <div className="sim-param-group" key={groupName}>
                     <h3>{groupName}</h3>
-                    {items.map(({ key, meta }) => {
+                    {items
+                      .filter(({ key }) =>
+                        // num_wells_btes is replaced by the pattern-dependent N fields below
+                        !(simSetup.case_type === "BTES" && key === "num_wells_btes")
+                      )
+                      .map(({ key, meta }) => {
                       const source = simSetup.sources[key];
                       const sourceClass = source === "data" ? "source-data" : "source-default";
                       const sourceLabel = source === "data" ? "from well data" : "default";
@@ -958,6 +987,124 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                         </div>
                       );
                     })}
+                    {groupName === "BTES Layout" && simSetup.case_type === "BTES" && (
+                      <>
+                        <div className="sim-param-row">
+                          <label htmlFor="sim-btes-pattern">Pattern</label>
+                          <div className="sim-param-input-wrap">
+                            <select
+                              id="sim-btes-pattern"
+                              className="sim-param-input"
+                              value={simPattern}
+                              onChange={(e) => setSimPattern(e.target.value)}
+                            >
+                              <option value="sunflower">Sunflower</option>
+                              <option value="rectangular">Rectangular</option>
+                              <option value="circular">Circular</option>
+                              <option value="polygonal">Polygonal</option>
+                            </select>
+                          </div>
+                        </div>
+                        {simPattern === "rectangular" ? (
+                          <>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-n1">Wells in x-dir (N₁)</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-n1"
+                                  className="sim-param-input"
+                                  value={simBtesN1}
+                                  min={1}
+                                  max={50}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v > 0) setSimBtesN1(v);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-n2">Wells in y-dir (N₂)</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-n2"
+                                  className="sim-param-input"
+                                  value={simBtesN2}
+                                  min={1}
+                                  max={50}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v > 0) setSimBtesN2(v);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </>
+                        ) : simPattern === "polygonal" ? (
+                          <>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-n">Number of wells (N)</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-n"
+                                  className="sim-param-input"
+                                  value={simBtesN}
+                                  min={3}
+                                  max={200}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v > 0) setSimBtesN(v);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-sides">Number of sides</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-sides"
+                                  className="sim-param-input"
+                                  value={simBtesNumSides}
+                                  min={3}
+                                  max={20}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v >= 3) setSimBtesNumSides(v);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="sim-param-row">
+                            <label htmlFor="sim-btes-n">Number of wells (N)</label>
+                            <div className="sim-param-input-wrap">
+                              <input
+                                type="number"
+                                id="sim-btes-n"
+                                className="sim-param-input"
+                                value={simBtesN}
+                                min={1}
+                                max={200}
+                                step={1}
+                                onChange={(e) => {
+                                  const v = parseInt(e.target.value, 10);
+                                  if (!isNaN(v) && v > 0) setSimBtesN(v);
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

@@ -113,7 +113,8 @@ Keys: label, unit, min, max, step, tooltip, group.
 """
 const PARAM_METADATA = Dict{String,Dict{String,Any}}(
     # Well / geometry
-    "well_depth"                => Dict{String,Any}("label" => "Well depth",                "unit" => "m",       "min" => 10,    "max" => 8000,  "step" => 10,    "tooltip" => "Total drilled depth of the well",                           "group" => "Well Geometry"),
+    "well_depth"                => Dict{String,Any}("label" => "Well length (H)",           "unit" => "m",       "min" => 10,    "max" => 8000,  "step" => 10,    "tooltip" => "Active borehole length (from top to bottom of heat-exchange section)", "group" => "Well Geometry"),
+    "borehole_start_depth"      => Dict{String,Any}("label" => "Start depth (D)",           "unit" => "m",       "min" => 0.0,   "max" => 100.0, "step" => 0.1,   "tooltip" => "Depth from surface to top of the active borehole section",  "group" => "Well Geometry"),
     "borehole_diameter"         => Dict{String,Any}("label" => "Borehole diameter",         "unit" => "mm",      "min" => 50,    "max" => 500,   "step" => 1,     "tooltip" => "Diameter of the borehole",                                   "group" => "Well Geometry"),
     # Rock properties
     "surface_temperature"       => Dict{String,Any}("label" => "Surface temperature",       "unit" => "°C",      "min" => -10,   "max" => 40,    "step" => 0.5,   "tooltip" => "Mean annual temperature at the surface",                     "group" => "Rock Properties"),
@@ -140,14 +141,14 @@ const PARAM_METADATA = Dict{String,Dict{String,Any}}(
 """Parameter keys used for each case type, in display order."""
 const CASE_PARAMS = Dict{SimCaseType, Vector{String}}(
     SIM_AGS => [
-        "well_depth", "borehole_diameter",
+        "well_depth", "borehole_start_depth", "borehole_diameter",
         "surface_temperature", "geothermal_gradient",
         "rock_thermal_conductivity", "rock_heat_capacity",
         "porosity", "permeability",
         "temperature_inj", "flow_rate", "num_segments", "num_years",
     ],
     SIM_BTES => [
-        "well_depth", "num_wells_btes", "num_sectors", "well_spacing",
+        "well_depth", "borehole_start_depth", "num_wells_btes", "num_sectors", "well_spacing",
         "surface_temperature", "geothermal_gradient",
         "rock_thermal_conductivity", "rock_heat_capacity",
         "temperature_charge", "temperature_discharge",
@@ -158,6 +159,7 @@ const CASE_PARAMS = Dict{SimCaseType, Vector{String}}(
 """Default values for all parameters."""
 const PARAM_DEFAULTS = Dict{String,Any}(
     "well_depth"                => 200.0,
+    "borehole_start_depth"      => 0.5,
     "borehole_diameter"         => 140.0,
     "temperature_inj"           => 25.0,
     "flow_rate"                 => 25.0,
@@ -363,11 +365,11 @@ function run_fimbul_simulation(setup::AbstractDict; mock::Bool=false)
         return _run_mock_simulation(case_type, params)
     end
 
-    return _run_fimbul_live(case_type, params)
+    return _run_fimbul_live(case_type, params, setup)
 end
 
 """Run simulation using Fimbul.jl."""
-function _run_fimbul_live(case_type, params)
+function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
     try
         _sim_log_push!("Initializing $case_type simulation...")
 
@@ -387,11 +389,25 @@ function _run_fimbul_live(case_type, params)
                 num_years                 = round(Int, params["num_years"]),
             )
         elseif case_type == "BTES"
-            _sim_log_push!("Creating BTES case with $(get(params, "num_wells_btes", "?")) wells...")
-            case = Fimbul.btes(;
-                num_wells            = round(Int, params["num_wells_btes"]),
+            local _H   = Float64(get(params, "well_depth", 200.0))
+            local _D   = Float64(get(params, "borehole_start_depth", 0.5))
+            local _tc  = Float64(get(params, "rock_thermal_conductivity", 3.0))
+            local _hc  = Float64(get(params, "rock_heat_capacity", 900.0))
+            local _pat = Symbol(get(setup, "pattern", "sunflower"))
+            local _n1_raw = get(setup, "num_wells_1", nothing)
+            local _n1 = _n1_raw !== nothing ? round(Int, _n1_raw) : round(Int, get(params, "num_wells_btes", 48))
+            local _n2_raw = get(setup, "num_wells_2", nothing)
+            local _n2 = _n2_raw !== nothing ? round(Int, _n2_raw) : 6
+            _sim_log_push!("Creating BTES case: pattern=$(_pat), N₁=$(_n1), N₂=$(_n2), H=$(_H)m, D=$(_D)m...")
+            case = Fimbul.btes(_pat;
+                num_wells_1          = _n1,
+                num_wells_2          = _n2,
                 num_sectors          = round(Int, params["num_sectors"]),
                 well_spacing         = params["well_spacing"],
+                well_depth           = _H,
+                layer_depths         = [0.0, _D, _H, _H + 15.0],
+                thermal_conductivity = [0.034, _tc, _tc] .* Fimbul.watt / (Fimbul.meter * Fimbul.Kelvin),
+                heat_capacity        = [1500.0, _hc, _hc] .* Fimbul.joule / (Fimbul.kilogram * Fimbul.Kelvin),
                 temperature_charge   = Fimbul.convert_to_si(params["temperature_charge"], :Celsius),
                 temperature_discharge = Fimbul.convert_to_si(params["temperature_discharge"], :Celsius),
                 rate_charge          = params["rate_charge"] * Fimbul.litre / Fimbul.second,

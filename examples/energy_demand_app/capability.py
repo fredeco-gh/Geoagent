@@ -403,8 +403,11 @@ begin
     end
     import JSON3
     local _setup = Dict{String,Any}(
-        "case_type" => "__CASE_TYPE__",
-        "parameters" => Dict{String,Any}(
+        "case_type"   => "__CASE_TYPE__",
+        "pattern"     => "__PATTERN__",
+        "num_wells_1" => __NUM_WELLS_1__,
+        "num_wells_2" => __NUM_WELLS_2__,
+        "parameters"  => Dict{String,Any}(
         JSON3.read(raw"""__PARAMS_JSON__""", Dict{String,Float64})),
     )
     local _errors = validate_simulation_params(_setup)
@@ -523,6 +526,9 @@ async def _execute_fimbul_simulation(
     case_type: str,
     parameters: dict[str, Any],
     *,
+    pattern: str = "sunflower",
+    num_wells_1: int | None = None,
+    num_wells_2: int | None = None,
     on_chunk: Callable[[OutputChunk], None] | None = None,
 ) -> dict[str, Any]:
     """Run a Fimbul simulation in the session's own persistent Julia kernel.
@@ -539,6 +545,9 @@ async def _execute_fimbul_simulation(
         _SIMULATE_TEMPLATE,
         JL_PATH=jl_path,
         CASE_TYPE=case_type,
+        PATTERN=pattern,
+        NUM_WELLS_1="nothing" if num_wells_1 is None else str(int(num_wells_1)),
+        NUM_WELLS_2="nothing" if num_wells_2 is None else str(int(num_wells_2)),
         PARAMS_JSON=json.dumps({k: float(v) for k, v in parameters.items()}),
         RESULT_PATH=result_path.as_posix(),
     )
@@ -1091,6 +1100,20 @@ def make_run_simulation_action(simulation_jl_path: str):
         tool_call_id = f"sim-{uuid.uuid4().hex[:8]}"
         label = f"Run {case_type or 'Fimbul'} simulation"
 
+        # Extract BTES pattern/layout controls from the UI form (not in parameters
+        # since they're strings or depend on pattern choice).
+        pattern = str(args.get("pattern") or "sunflower")
+        _pat = pattern.lower()
+        if _pat == "rectangular":
+            num_wells_1 = int(args["n_1"]) if "n_1" in args else None
+            num_wells_2 = int(args["n_2"]) if "n_2" in args else None
+        elif _pat == "polygonal":
+            num_wells_1 = int(args["n"]) if "n" in args else None
+            num_wells_2 = int(args["num_sides"]) if "num_sides" in args else None
+        else:  # sunflower, circular
+            num_wells_1 = int(args["n"]) if "n" in args else None
+            num_wells_2 = None
+
         await send_wire(
             {
                 "type": "tool",
@@ -1130,7 +1153,9 @@ def make_run_simulation_action(simulation_jl_path: str):
         consumer = asyncio.create_task(drain_chunks())
         try:
             result = await _execute_fimbul_simulation(
-                session, simulation_jl_path, case_type, parameters, on_chunk=on_chunk
+                session, simulation_jl_path, case_type, parameters,
+                pattern=pattern, num_wells_1=num_wells_1, num_wells_2=num_wells_2,
+                on_chunk=on_chunk,
             )
         except Exception as exc:
             await chunk_queue.put(None)
