@@ -110,6 +110,10 @@ _session_last_well_props: dict[str, dict[str, Any]] = {}
 # returns instantly without an extra Julia call.
 _session_resolved_well_params: dict[str, dict[str, Any]] = {}
 
+# Most recent Fimbul simulation result per session — cached so view_simulation_result
+# can return well output time series in addition to 3D reservoir images.
+_session_last_sim_result: dict[str, dict[str, Any]] = {}
+
 
 def _aggregate_tin_profile(
     T_in: list[float],
@@ -688,10 +692,17 @@ def _start_cairo_warmup(session: Session) -> None:
 def _summarize_simulation_result(
     case_type: str, parameters: dict[str, Any], result: dict[str, Any]
 ) -> str:
-    wells = ", ".join(result.get("well_data", {}).keys()) or "none"
+    well_data = result.get("well_data", {})
+    wells = ", ".join(well_data.keys()) or "none"
+    rvars = result.get("reservoir_vars", [])
+    wvars = sorted({k for wdata in well_data.values() for k in wdata})
     return (
         f"{case_type} simulation completed: {result.get('num_steps', '?')} timesteps, "
-        f"well(s): {wells}. Parameters used: {parameters}."
+        f"well(s): {wells}.\n"
+        f"Call view_simulation_result(var=...) to inspect results. "
+        f"Reservoir state variables (rendered as 3D images): {', '.join(rvars) or 'none'}. "
+        f"Well output variables (returned as time series): {', '.join(wvars) or 'none'}.\n"
+        f"Parameters used: {parameters}."
     )
 
 
@@ -1004,6 +1015,13 @@ def _record_simulation_artifact(
     own sidebar). Each run gets its own file, slot, and caption number, so a
     later run opens an additional tab instead of overwriting the previous
     run's results out from under it."""
+    _session_last_sim_result[session.session_id] = {
+        "case_type":      case_type,
+        "well_data":      result.get("well_data", {}),
+        "timestamps":     result.get("timestamps", []),
+        "reservoir_vars": result.get("reservoir_vars", []),
+        "num_steps":      result.get("num_steps", 0),
+    }
     run_no = _simulation_run_count.get(session.session_id, 0) + 1
     _simulation_run_count[session.session_id] = run_no
     rel = f"artifacts/simulation-results-{run_no}.html"
@@ -1067,28 +1085,57 @@ def _make_view_simulation_result_tool(session: Session, simulation_jl_path: str)
     async def view_simulation_result(
         var: str = "Temperature", step: int = -1, delta: bool = False
     ) -> str | list[dict[str, Any]]:
-        """Show a reservoir-state image from the most recent simulation.
+        """Inspect a variable from the simulation the user ran via the map
+        sidebar's 'Run' button. Call this when the user asks about any aspect
+        of that result — the simulation summary tells you which variables are
+        available.
 
-        Lets you actually see (and describe) the reservoir field, rather than
-        only knowing the summary numbers — call this when asked what a result
-        "looks like". Errors if no simulation has run yet this session.
+        Works for two kinds of variables:
+        - Reservoir state variables (e.g. "Temperature", "Pressure"): rendered
+          as a 3D image of the spatial field you can see and describe.
+        - Well output variables (e.g. "AqueousMassRate", "Temperature" at the
+          wellhead): returned as a time series (timestamps + values per well).
 
         Args:
-            var: Reservoir variable to render (e.g. "Temperature", "Pressure").
-            step: 1-based timestep to show; -1 (default) for the last step.
-            delta: Show the change from the initial state instead of the
-                absolute value.
+            var: Variable name from the simulation result.
+            step: Timestep for reservoir images (1-based; -1 = last step).
+            delta: For reservoir images, show change from initial state.
         """
+        # Try rendering as a 3D reservoir image first.
         try:
             b64 = await _render_simulation_view(session, simulation_jl_path, var, step, delta)
         except Exception as exc:
             return f"ERROR: {exc}"
-        if not b64:
+
+        if b64:
+            return [
+                {"type": "text", "text": f"Reservoir {var} at the requested step."},
+                {"type": "image", "mime_type": "image/png", "base64": b64},
+            ]
+
+        # Not a reservoir state variable — check the cached well output data.
+        cached = _session_last_sim_result.get(session.session_id)
+        if cached is None:
             return "No simulation result is available yet — run a simulation first."
-        return [
-            {"type": "text", "text": f"Reservoir {var} at the requested step."},
-            {"type": "image", "mime_type": "image/png", "base64": b64},
-        ]
+
+        well_data: dict[str, dict[str, list]] = cached.get("well_data", {})
+        timestamps: list[float] = cached.get("timestamps", [])
+        rvars: list[str] = cached.get("reservoir_vars", [])
+        wvars = sorted({k for wdata in well_data.values() for k in wdata})
+
+        wells_with_var = {wname: wdata[var] for wname, wdata in well_data.items() if var in wdata}
+        if wells_with_var:
+            lines = [f"Well output time series for '{var}' (timestamps in days):"]
+            lines.append(f"t = {timestamps}")
+            for wname, values in wells_with_var.items():
+                lines.append(f"{wname}: {values}")
+            return "\n".join(lines)
+
+        return (
+            f"Variable '{var}' not found in this simulation's results.\n"
+            f"Reservoir state variables (3D images): {', '.join(rvars) or 'none'}\n"
+            f"Well output variables (time series): {', '.join(wvars) or 'none'}"
+        )
 
     return view_simulation_result
 
