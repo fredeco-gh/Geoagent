@@ -427,7 +427,9 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
         # Fimbul's own progress output (progress bars etc.) goes straight to
         # stdout; the caller's kernel eval streams it live, same as any other
         # long-running Julia computation — no manual capture needed here.
-        results = Fimbul.simulate_reservoir(case)
+        # info_level=-1 suppresses JutulDarcy's browser-based reservoir viewer
+        # (WGLMakie/Bonito), which would otherwise open a new browser tab.
+        results = Fimbul.simulate_reservoir(case; info_level = -1)
 
         _sim_log_push!("Simulation completed. Extracting results...")
 
@@ -788,7 +790,7 @@ function run_btes_validation(setup::AbstractDict)
         _sim_log_push!("Schedule: $n_periods periods, $(round(sum(durations_s)/86400; digits=1)) days total.")
         _sim_log_push!("Starting Fimbul validation simulation...")
 
-        results = simulate_reservoir(JutulCase(model, dt_vec, forces_vec, state0=state0))
+        results = simulate_reservoir(JutulCase(model, dt_vec, forces_vec, state0=state0); info_level = -1)
 
         _sim_log_push!("Simulation done. Extracting results...")
 

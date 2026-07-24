@@ -25,14 +25,15 @@ data live in the same process now), so the agent can give an honest answer
 immediately instead of waiting for the browser to report back on the *next*
 message (see docs/server-interface.md's ui_event queueing).
 
-The simulation tools (``run_simulation``, ``view_simulation_result``) reuse
-geothermal-viz's own ``julia/simulation.jl`` verbatim — ``include()``d once into
-the session's own kernel — rather than porting its Fimbul/parameter-mapping
-logic into Python. ``make_run_simulation_action``/``make_setup_simulation_action``
-are the map's two direct, non-LLM entry points (the sidebar's "Setup
-Simulation"/"Run" buttons): for when the front end already has exact,
-structured inputs and there is nothing for the model to decide — see
-docs/server-interface.md and jutul_agent.interfaces.server.app.ActionHandler.
+``get_selected_well_params`` exposes the resolved Fimbul parameters for the
+most recently clicked well so the agent can use them as baseline inputs when
+the user asks it to run a simulation. ``view_simulation_result`` renders a
+reservoir-state image from the most recent run. ``make_run_simulation_action``/
+``make_setup_simulation_action`` are the map's two direct, non-LLM entry
+points (the sidebar's "Setup Simulation"/"Run" buttons): for when the front
+end already has exact, structured inputs and there is nothing for the model
+to decide — see docs/server-interface.md and
+jutul_agent.interfaces.server.app.ActionHandler.
 """
 
 from __future__ import annotations
@@ -99,6 +100,15 @@ _session_fimbul_validation_results: dict[str, dict] = {}
 # Per-session count of Fimbul validation runs; each run gets its own slot so
 # validation tabs accumulate instead of overwriting each other.
 _fimbul_validation_run_count: dict[str, int] = {}
+
+# Raw properties of the most recently selected well or well park per session —
+# set by the track_selected_well action (well click).
+_session_last_well_props: dict[str, dict[str, Any]] = {}
+
+# Resolved Fimbul parameters for the most recently selected well per session —
+# pre-populated in the background when a well is clicked so get_selected_well_params
+# returns instantly without an extra Julia call.
+_session_resolved_well_params: dict[str, dict[str, Any]] = {}
 
 
 def _aggregate_tin_profile(
@@ -1014,35 +1024,42 @@ def _record_simulation_artifact(
     return rel
 
 
-def _make_run_simulation_tool(session: Session, simulation_jl_path: str):
-    # Reuses the same ContextVar-based streaming writer run_julia uses, so this
-    # tool's progress shows up live in its tool card exactly the same way.
-    from jutul_agent.agent.tools import _capture_delta_writer
-
+def _make_get_selected_well_params_tool(session: Session, simulation_jl_path: str):
     @tool
-    async def run_simulation(case_type: str, parameters: dict[str, float]) -> str:
-        """Run a Fimbul geothermal simulation (an AGS or BTES case).
+    async def get_selected_well_params() -> str | dict[str, Any]:
+        """Return the resolved Fimbul simulation parameters for the most recently
+        selected well or well park on the map.
 
-        Args:
-            case_type: "AGS" (single energy well) or "BTES" (well-park array).
-            parameters: Simulation parameters by name (e.g. well_depth,
-                surface_temperature, geothermal_gradient, flow_rate, num_years,
-                ...). Prefer values already resolved for the well in question
-                (e.g. from a well's metadata) over invented ones, and confirm
-                with the user before changing key parameters yourself.
+        Use these as the starting point when the user asks to simulate a well they
+        have clicked. The returned dict contains ``case_type`` ("AGS" or "BTES")
+        and ``parameters`` with values derived from the well's metadata. These are
+        *defaults* — override any of them freely if the user asks for different
+        values (e.g. a different depth, spacing, or number of years).
+
+        No building heating demand data is needed for well simulations. Well
+        simulations run entirely from the well's own metadata parameters.
+
+        Returns an error string if no well has been selected yet.
         """
-        try:
-            result = await _execute_fimbul_simulation(
-                session, simulation_jl_path, case_type, parameters, on_chunk=_capture_delta_writer()
+        setup = _session_resolved_well_params.get(session.session_id)
+        if setup is None:
+            # Background resolution may not have finished yet — try a live call.
+            well_props = _session_last_well_props.get(session.session_id)
+            if well_props:
+                with contextlib.suppress(Exception):
+                    setup = await _setup_simulation_params(
+                        session, simulation_jl_path, well_props
+                    )
+                    if setup and setup.get("simulatable"):
+                        _session_resolved_well_params[session.session_id] = setup
+        if setup is None:
+            return (
+                "No well is currently selected, or its parameters have not been "
+                "resolved yet. Ask the user to click a well on the map first."
             )
-        except Exception as exc:
-            return f"ERROR: simulation failed: {exc}"
-        if result.get("status") != "completed":
-            return f"ERROR: {result.get('message', 'simulation failed')}"
-        _record_simulation_artifact(session, case_type, parameters, result)
-        return _summarize_simulation_result(case_type, parameters, result)
+        return setup
 
-    return run_simulation
+    return get_selected_well_params
 
 
 def _make_view_simulation_result_tool(session: Session, simulation_jl_path: str):
@@ -1250,6 +1267,9 @@ def make_setup_simulation_action(simulation_jl_path: str):
                 }
             )
             return
+        # Keep the resolved-params cache fresh — get_selected_well_params reads from here.
+        if result.get("simulatable"):
+            _session_resolved_well_params[session.session_id] = result
         await send_wire(
             {
                 "type": "ui",
@@ -1261,6 +1281,39 @@ def make_setup_simulation_action(simulation_jl_path: str):
         _start_cairo_warmup(session)
 
     return setup_simulation_action
+
+
+def make_track_selected_well_action(simulation_jl_path: str):
+    """Records the raw GeoJSON properties of the most recently clicked well or
+    well park and eagerly resolves its Fimbul parameters in the background, so
+    ``get_selected_well_params`` returns instantly without an extra Julia call.
+
+    Triggered from MapPanel.tsx whenever a well feature is selected.
+    """
+
+    async def track_selected_well_action(
+        session: Session,
+        args: dict[str, Any],
+        _send_wire: Callable[[dict[str, Any]], Awaitable[None]],
+        _queue_ui_event: Callable[[Any], None],
+    ) -> None:
+        props = dict(args)
+        _session_last_well_props[session.session_id] = props
+        # Clear any stale resolved params so get_selected_well_params doesn't
+        # return a previous well's values if the background task hasn't finished.
+        _session_resolved_well_params.pop(session.session_id, None)
+
+        async def _resolve() -> None:
+            with contextlib.suppress(Exception):
+                setup = await _setup_simulation_params(session, simulation_jl_path, props)
+                if setup.get("simulatable"):
+                    _session_resolved_well_params[session.session_id] = setup
+
+        task = asyncio.create_task(_resolve())
+        _warmup_tasks.add(task)
+        task.add_done_callback(_warmup_tasks.discard)
+
+    return track_selected_well_action
 
 
 def _make_run_borehole_simulation_tool(session: Session):
@@ -2556,25 +2609,31 @@ _PROMPT_FRAGMENT = (
     "the map themselves (e.g. selecting a well or building); when they do, a note "
     "describing it is prepended to their next message as '[UI events since "
     "your last message]', so you'll see it as part of what they sent.\n\n"
-    "Call `run_simulation` to run a Fimbul geothermal simulation (an AGS or "
-    "BTES case) with given parameters, and `view_simulation_result` to look at "
-    "a reservoir-state image from the most recent run. The user's own map "
-    "sidebar also has a 'Setup Simulation' button that resolves and runs these "
-    "directly (bypassing you) for a selected well — if they used it, you'll "
-    "learn about the completed run the same way as any other UI event.\n\n"
-    "Call `show_borehole_field` to visualize a borehole field on the map at the "
-    "selected building's location, showing each borehole as a 3D cylinder at its "
-    "actual position. Use it whenever the user wants to see a field layout — "
-    "before or after running a simulation, or to compare different configurations. "
-    "It takes the same geometry parameters as `run_borehole_simulation` and `run_fimbul_validation`. "
-    "The visualization disappears when the user clicks another building or well.\n\n"
-    "Important: clicking a building on the map and generating its heating needs "
-    "are two separate steps. Clicking only selects the building — no simulation "
-    "data exists yet. The user must then click 'Generate heating needs' before "
-    "any simulation can run. Only one building's needs data is held at a time; "
-    "generating for a new building replaces the previous one entirely. If the user "
-    "asks to simulate a building they have selected but not yet generated heating needs "
-    "for, tell them to click 'Generate heating needs' for it first.\n\n"
+    "The map has two completely separate simulation workflows — well simulations "
+    "and building simulations. They require different data and should never be "
+    "confused:\n\n"
+    "WELL SIMULATIONS (selected wells/well parks on the map): Call "
+    "`get_selected_well_params` to retrieve the Fimbul parameters for the most "
+    "recently selected well or well park. These are *defaults* derived from the "
+    "well's own metadata — override any of them freely if the user asks for "
+    "different values. No building or heating demand data is needed; well "
+    "simulations run entirely from the well metadata. You can run a Fimbul "
+    "simulation yourself in the Julia kernel using those parameters. "
+    "The user can also run one directly via the map sidebar's 'Setup Simulation' "
+    "and 'Run' buttons — when they do, you learn about the completed run via a "
+    "`simulationCompleted` UI event on their next message. "
+    "Call `view_simulation_result` after a sidebar 'Run' to get a reservoir-state "
+    "image you can read and describe — it accesses whatever result the sidebar run "
+    "left in the kernel. (It will not reflect a simulation you ran yourself in "
+    "Julia, since those do not go through the same kernel state.)\n\n"
+    "BUILDING SIMULATIONS (selected buildings on the map): These require building "
+    "heating demand data, which must be generated first. Clicking a building only "
+    "selects it — the user must then click 'Generate heating needs' before any "
+    "building simulation can run. Never ask for or wait for heating demand data "
+    "when the user wants a well simulation. Call `show_borehole_field` to "
+    "visualize a borehole field on the map at the selected building's location. "
+    "Only one building's demand data is held at a time; generating for a new "
+    "building replaces the previous one entirely.\n\n"
     "Call `run_borehole_simulation` to run a single pygfunction borehole heat "
     "exchanger simulation on the heating demands most recently generated via the "
     "'Generate energy demands' button. Use this for a single configuration. "
@@ -2629,7 +2688,7 @@ def geothermal_map_capability(
             _make_go_to_building_tool,
             lambda session: _make_go_to_well_tool(session, data_path),
             lambda session: _make_go_to_well_park_tool(session, data_path),
-            lambda session: _make_run_simulation_tool(session, simulation_jl_path),
+            lambda session: _make_get_selected_well_params_tool(session, simulation_jl_path),
             lambda session: _make_view_simulation_result_tool(session, simulation_jl_path),
             _make_run_borehole_simulation_tool,
             _make_show_borehole_field_tool,

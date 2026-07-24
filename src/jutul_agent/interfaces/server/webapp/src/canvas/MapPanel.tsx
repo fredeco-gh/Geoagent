@@ -413,10 +413,11 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     }
     setSelected({ title, color, label, rows, properties: props, layer: layerName, lngLat });
 
-    // Relay the selection to the agent — mirrors geothermal-viz's own
-    // wellSelected event (jutul-agent-bridge.js used to forward it over
-    // postMessage); now it's a plain ui_event over the session's own socket.
+    // Relay the selection to the agent as a ui_event (queued for next message).
     onUiEvent({ event: "wellSelected", properties: props, lngLat });
+    // Also cache the raw well properties server-side so get_selected_well_params
+    // can resolve parameter defaults from this well's metadata.
+    onAction("track_selected_well", props as Record<string, unknown>);
   };
 
   // "Back to this view" bumps `reloadToken` to force a stuck/stale panel to
