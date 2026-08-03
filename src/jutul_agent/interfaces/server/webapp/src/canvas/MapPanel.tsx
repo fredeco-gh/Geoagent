@@ -1,4 +1,4 @@
-// The geothermal map as a native canvas panel — see docs/web-ui.md's
+﻿// The geothermal map as a native canvas panel — see docs/web-ui.md's
 // "Extending the canvas". Ported from geothermal-viz's web/js/app.js
 // (rendering: layers, popups, well info, terrain/3D buildings) onto the
 // generic `ui`/`ui_event` wire Phase 0 proved (canvas/registry.tsx's
@@ -746,7 +746,7 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               const _D = Number(setup.parameters["borehole_start_depth"] ?? 0.5);
               const _B = Number(setup.parameters["well_spacing"] ?? 5);
               const boreholes = computeBtesBoreholes("sunflower", _nw, _nw, 1, 6, _B, _H, _D);
-              wellbore3dRef.current?.showField(lngLat, boreholes);
+              wellbore3dRef.current?.showField(lngLat, boreholes, setup.parameters as Record<string, number>);
             } else {
               wellbore3dRef.current?.show(lngLat, setup.parameters, setup.case_type);
             }
@@ -823,6 +823,14 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     wellbore3dRef.current?.updateField(boreholes);
   }, [simPattern, simBtesN, simBtesN1, simBtesN2, simBtesNumSides,
       _btesSpacing, _btesH, _btesD, simSetup?.case_type, simPanelOpen]);
+
+  // Keep the controller's state.params in sync with simParams on every change.
+  // This covers borehole_diameter, num_segments, and all non-layout params for
+  // both AGS (where it is the sole visual-update path) and BTES.
+  useEffect(() => {
+    if (!simPanelOpen) return;
+    wellbore3dRef.current?.update(simParams);
+  }, [simPanelOpen, simParams]);
 
   const handleRunSimulation = () => {
     if (!simSetup?.case_type) return;
@@ -1050,7 +1058,10 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                                   step={1}
                                   onChange={(e) => {
                                     const v = parseInt(e.target.value, 10);
-                                    if (!isNaN(v) && v > 0) setSimBtesN1(v);
+                                    if (!isNaN(v) && v > 0) {
+                                      setSimBtesN1(v);
+                                      setSimParams((p) => ({ ...p, num_wells_btes: v * simBtesN2 }));
+                                    }
                                   }}
                                 />
                               </div>
@@ -1068,7 +1079,10 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                                   step={1}
                                   onChange={(e) => {
                                     const v = parseInt(e.target.value, 10);
-                                    if (!isNaN(v) && v > 0) setSimBtesN2(v);
+                                    if (!isNaN(v) && v > 0) {
+                                      setSimBtesN2(v);
+                                      setSimParams((p) => ({ ...p, num_wells_btes: simBtesN1 * v }));
+                                    }
                                   }}
                                 />
                               </div>
@@ -1089,7 +1103,10 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                                   step={1}
                                   onChange={(e) => {
                                     const v = parseInt(e.target.value, 10);
-                                    if (!isNaN(v) && v > 0) setSimBtesN(v);
+                                    if (!isNaN(v) && v > 0) {
+                                      setSimBtesN(v);
+                                      setSimParams((p) => ({ ...p, num_wells_btes: v }));
+                                    }
                                   }}
                                 />
                               </div>
@@ -1127,7 +1144,10 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                                 step={1}
                                 onChange={(e) => {
                                   const v = parseInt(e.target.value, 10);
-                                  if (!isNaN(v) && v > 0) setSimBtesN(v);
+                                  if (!isNaN(v) && v > 0) {
+                                    setSimBtesN(v);
+                                    setSimParams((p) => ({ ...p, num_wells_btes: v }));
+                                  }
                                 }}
                               />
                             </div>

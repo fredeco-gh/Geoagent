@@ -1,4 +1,4 @@
-// A custom MapLibre WebGL layer that draws a well's bore as stacked tapered
+﻿// A custom MapLibre WebGL layer that draws a well's bore as stacked tapered
 // cylinder segments above its surface point, colour-ramped by depth, with a
 // red wellhead cap and a rise-up animation. AGS (a single energy well) draws
 // one column; BTES (a well park) draws a hexagonal array. Ported from
@@ -20,6 +20,7 @@ const N_SIDES = 16; // smooth cylindrical cross-section
 const MIN_SEGMENTS = 2;
 const MAX_SEGMENTS = 100;
 const MAX_RENDERED_WELLS = 80;
+const DEFAULT_BOREHOLE_DIAMETER_MM = 140; // reference borehole diameter for radius scaling
 const ANIM_DURATION = 1200;
 const ANIM_DELAY = 500;
 const FLY_ZOOM = 15.5;
@@ -238,18 +239,20 @@ function buildVertices(
   const verts: number[] = [];
   const depth = params.well_length || 200;
   const nSeg = Math.max(MIN_SEGMENTS, Math.min(Math.round(params.num_segments || 10), MAX_SEGMENTS));
+  const D = params.borehole_start_depth ?? 0.5;
+  const diamScale = Math.max(0.5, Math.min(3, (params.borehole_diameter ?? DEFAULT_BOREHOLE_DIAMETER_MM) / DEFAULT_BOREHOLE_DIAMETER_MM));
 
   let positions: HexPos[];
   let baseRadius: number;
   if (caseType === "BTES") {
     const n = Math.min(params.num_wells_btes || 48, MAX_RENDERED_WELLS);
     const sp = params.well_spacing || 5;
-    baseRadius = PARK_WELL_RADIUS * scale;
+    baseRadius = PARK_WELL_RADIUS * scale * diamScale;
     const displaySpacing = Math.max(PARK_WELL_RADIUS * 3, sp * (n > 20 ? 4 : 6));
     positions = hexLayout(n, displaySpacing);
   } else {
     positions = [{ dx: 0, dy: 0 }];
-    baseRadius = WELL_RADIUS * scale;
+    baseRadius = WELL_RADIUS * scale * diamScale;
   }
 
   const segTotal = depth / nSeg;
@@ -265,7 +268,7 @@ function buildVertices(
   for (const pos of positions) {
     const cx = center.x + pos.dx * scale;
     const cy = center.y - pos.dy * scale;
-    let curZ = base;
+    let curZ = base - D;
 
     for (let i = 0; i < nSeg; i++) {
       const t = nSeg > 1 ? i / (nSeg - 1) : 0.5;
@@ -277,8 +280,8 @@ function buildVertices(
     }
 
     const capH = Math.max(depth * CAP_HEIGHT_FRAC, 3);
-    const capZ0 = (base + depth) * scale * progress;
-    const capZ1 = (base + depth + capH) * scale * progress;
+    const capZ0 = (base - D + depth) * scale * progress;
+    const capZ1 = (base - D + depth + capH) * scale * progress;
     const capR = baseRadius * 1.25;
     if (capZ1 > capZ0 + 1e-12) addCappedCylinder(verts, cx, cy, capZ0, capZ1, capR, CAP_COLOR, 1.0);
   }
@@ -306,9 +309,11 @@ function buildFieldVertices(
   displayScale: number,
   progress: number,
   groundElevation: number,
+  params?: Record<string, number>,
 ): Float32Array {
   const verts: number[] = [];
-  const baseRadius = PARK_WELL_RADIUS * scale;
+  const diamScale = Math.max(0.5, Math.min(3, (params?.borehole_diameter ?? DEFAULT_BOREHOLE_DIAMETER_MM) / DEFAULT_BOREHOLE_DIAMETER_MM));
+  const baseRadius = PARK_WELL_RADIUS * scale * diamScale;
   const base = groundElevation + VERTICAL_OFFSET;
 
   for (const bh of boreholes) {
@@ -360,7 +365,7 @@ export interface Wellbore3D {
   /** Show (or replace) the 3D wellbore at `lngLat`, animating it rising up. */
   show(lngLat: { lng: number; lat: number }, params: Record<string, number>, caseType: string | null): void;
   /** Show (or replace) a borehole field at `lngLat` using explicit positions. */
-  showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[]): void;
+  showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[], params?: Record<string, number>): void;
   /** Live-update field borehole positions without re-animating (for real-time param changes). */
   updateField(boreholes: BoreholePos[]): void;
   /** Live-update displayed parameters (e.g. an edited depth) without re-animating. */
@@ -399,7 +404,7 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     const scale = mc.meterInMercatorCoordinateUnits();
     const groundElevation = map.queryTerrainElevation(state.lngLat) ?? 0;
     const vertices = state.boreholes
-      ? buildFieldVertices(mc, scale, state.boreholes, state.fieldDisplayScale, state.progress, groundElevation)
+      ? buildFieldVertices(mc, scale, state.boreholes, state.fieldDisplayScale, state.progress, groundElevation, state.params ?? {})
       : buildVertices(mc, scale, state.params!, state.caseType, state.progress, groundElevation);
     gl.bindBuffer(gl.ARRAY_BUFFER, state.buffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
@@ -508,9 +513,10 @@ export function createWellbore3D(map: maplibregl.Map): Wellbore3D {
     map.triggerRepaint();
   }
 
-  function showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[]): void {
+  function showField(lngLat: { lng: number; lat: number }, boreholes: BoreholePos[], params?: Record<string, number>): void {
     remove();
 
+    state.params = { ...(params ?? {}) };
     state.lngLat = lngLat;
     state.boreholes = boreholes;
     state.active = true;

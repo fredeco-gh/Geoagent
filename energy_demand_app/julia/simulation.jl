@@ -1,4 +1,4 @@
-"""
+﻿"""
     Simulation parameter mapping layer
 
 Maps well metadata from the Norwegian borehole database to Fimbul.jl
@@ -166,7 +166,7 @@ const PARAM_DEFAULTS = Dict{String,Any}(
     "num_years"                 => 25,
     "num_segments"              => 10,
     "num_wells_btes"            => 48,
-    "num_sectors"               => 6,
+    "num_sectors"               => 4,
     "well_spacing"              => 5.0,
     "temperature_charge"        => 90.0,
     "temperature_discharge"     => 10.0,
@@ -328,19 +328,26 @@ function validate_simulation_params(params::AbstractDict)
         end
     end
 
-    # Fimbul.btes divides wells evenly into num_sectors and special-cases the
-    # innermost/outermost well of each sector — a sector left with exactly one
-    # well hits both special cases at once and Fimbul indexes past the end of a
-    # 1-element array. Catch it here with a clear message instead of a bare
-    # BoundsError from inside the simulator.
+    # Each sector must have at least one well — fewer wells than sectors leaves
+    # some sectors empty, which Fimbul cannot handle.
+    # Use the actual pattern-level N when provided (from UI layout controls),
+    # falling back to the form parameter num_wells_btes.
     if case_type == "BTES"
-        n = _numeric(get(parameters, "num_wells_btes", nothing))
+        n1_raw = get(params, "num_wells_1", nothing)
+        n = if n1_raw !== nothing
+            _n1 = round(Int, _numeric(n1_raw))
+            n2_raw = get(params, "num_wells_2", nothing)
+            pat = string(get(params, "pattern", "sunflower"))
+            (pat == "rectangular" && n2_raw !== nothing) ? _n1 * round(Int, _numeric(n2_raw)) : _n1
+        else
+            _numeric(get(parameters, "num_wells_btes", nothing))
+        end
         s = _numeric(get(parameters, "num_sectors", nothing))
-        if n !== nothing && s !== nothing && s > 0 && n < 2 * s
+        if n !== nothing && s !== nothing && s > 0 && n < s
             push!(errors, ("num_wells_btes",
-                "Number of wells must be at least 2x the number of sectors " *
-                "(need $(round(Int, 2 * s)) wells for $(round(Int, s)) sectors, " *
-                "or fewer sectors) — each sector needs at least 2 wells"))
+                "Number of wells must be at least equal to the number of sectors " *
+                "(need $(round(Int, s)) wells for $(round(Int, s)) sectors, " *
+                "or fewer sectors) — each sector needs at least 1 well"))
         end
     end
 
