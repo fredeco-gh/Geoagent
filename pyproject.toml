@@ -59,6 +59,7 @@ Issues = "https://github.com/SINTEF-agentlab/jutul-agent/issues"
 
 [project.scripts]
 jutul-agent = "jutul_agent.__main__:main"
+geoagent = "energy_demand_app.__main__:main"
 
 [project.optional-dependencies]
 eval = [
@@ -101,10 +102,20 @@ source = "vcs"
 version-file = "src/jutul_agent/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jutul_agent"]
+packages = ["src/jutul_agent", "energy_demand_app"]
 # The web UI ships pre-built (interfaces/server/web_dist). Its React/TS source and
 # node_modules under interfaces/server/webapp are dev-only — never ship them.
-exclude = ["src/jutul_agent/interfaces/server/webapp"]
+# energy_demand_app/workspace is runtime user data; .env holds secrets; scripts/
+# is an offline data-processing step not needed at runtime.
+exclude = [
+    "src/jutul_agent/interfaces/server/webapp",
+    "energy_demand_app/workspace",
+    "energy_demand_app/.env",
+    "energy_demand_app/scripts",
+    "energy_demand_app/README.md",
+    "energy_demand_app/.gitignore",
+    "energy_demand_app/__pycache__",
+]
 
 # Whitelist what ships in the source distribution. Keeps local development
 # scratch directories at the repo root from ever leaking into a release.

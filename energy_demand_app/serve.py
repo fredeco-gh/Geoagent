@@ -33,17 +33,20 @@ os.environ.setdefault("JULIA_CONDAPKG_BACKEND", "Null")
 os.environ.setdefault("JULIA_PYTHONCALL_EXE", sys.executable)
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
+# Flat imports (capability, backend_building_selection, …) work when running
+# directly because Python adds the script's directory to sys.path automatically.
+# When installed as a package entry point that doesn't happen, so we add it here.
+sys.path.insert(0, str(EXAMPLE_DIR))
+
 DATA_DIR = EXAMPLE_DIR / "data"
 DATA_PATH = DATA_DIR / "all_boreholes.geojson"
 SIMULATION_JL = EXAMPLE_DIR / "julia" / "simulation.jl"
 PYGSIM_JL = EXAMPLE_DIR / "julia" / "pygfunction_sim.jl"
 
-# Pinned rather than left to default to the launching shell's cwd: a session's
-# Julia env (and its precompile-done marker) lives under <workspace>/.jutul-agent/,
-# so if this varied by which directory you happened to run this script from,
-# every run with a different cwd would bootstrap and precompile a brand new
-# env from scratch.
-WORKSPACE = EXAMPLE_DIR / "workspace"
+# User-writable, install-independent workspace. Placing it here (rather than
+# relative to EXAMPLE_DIR) means reinstalling the tool doesn't wipe the Julia
+# env that jutil-agent init already compiled (~10 min).
+WORKSPACE = Path.home() / ".geoagent" / "workspace"
 
 HOST = "127.0.0.1"
 PORT = 8740
