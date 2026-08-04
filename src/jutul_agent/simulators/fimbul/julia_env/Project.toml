@@ -25,7 +25,7 @@ JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
 # env_setup copies in at bootstrap. JutulAgentFimbul is this env's per-simulator
 # warm-up package (the solve/plot bake + @recompile_invalidations).
 # Fimbul is pinned to a fork that adds extra btes() field patterns (rectangular,
-# circular, polygonal) needed by the energy_demand_app.
+# circular, polygonal) needed by the geoagent_app.
 [sources]
 JutulAgent = {path = "JutulAgent"}
 JutulAgentFimbul = {path = "JutulAgentFimbul"}

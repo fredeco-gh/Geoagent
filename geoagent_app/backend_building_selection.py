@@ -781,7 +781,7 @@ def start_pygsim_warmup(session: object, pygsim_jl_path: str) -> None:
 
 
 # Julia template that runs the pygfunction borehole simulation via the
-# PythonCall overlay (examples/energy_demand_app/julia/pygfunction_sim.jl).
+# PythonCall overlay (examples/geoagent_app/julia/pygfunction_sim.jl).
 # Paths are injected by make_generate_energy_demands_action at call time.
 _PYGSIM_TEMPLATE = """
 begin

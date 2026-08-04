@@ -21,7 +21,7 @@ def main() -> int:
     cmd = sys.argv[1] if len(sys.argv) > 1 else "serve"
 
     if cmd == "serve":
-        from energy_demand_app.serve import main as serve_main
+        from geoagent_app.serve import main as serve_main
 
         return serve_main()
 

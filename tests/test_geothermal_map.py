@@ -14,7 +14,7 @@ from jutul_agent.juliakernel.result import EvalResult
 from jutul_agent.session import Session
 
 _CAPABILITY_PATH = (
-    Path(__file__).resolve().parents[1] / "energy_demand_app" / "capability.py"
+    Path(__file__).resolve().parents[1] / "geoagent_app" / "capability.py"
 )
 
 

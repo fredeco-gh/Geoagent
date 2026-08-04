@@ -16,7 +16,7 @@ the first place.
 
 This example runs on jutul-agent's built-in ``fimbul`` simulator and its
 already-declared Julia environment — no extra Julia setup of its own. Run it
-with ``python energy_demand_app/serve.py`` from the repo root.
+with ``python geoagent_app/serve.py`` from the repo root.
 """
 
 from __future__ import annotations

@@ -254,7 +254,7 @@ runs on.
 
 ## The example app
 
-The repository includes a full-featured example app under `energy_demand_app/`
+The repository includes a full-featured example app under `geoagent_app/`
 that exercises the whole interface and serves as a starting point to copy. It
 wires a geothermal well map into jutil-agent's native canvas panel, adds
 simulation and building energy-demand capabilities, and runs on the built-in

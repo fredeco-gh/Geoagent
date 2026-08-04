@@ -37,7 +37,7 @@ dependencies = [
     # Used directly by the declarative HTTP tools (agent/capabilities.py) to call a
     # host application's endpoints.
     "httpx>=0.27",
-    # Geospatial and data processing (energy_demand_app and similar examples).
+    # Geospatial and data processing (geoagent_app and similar examples).
     "requests>=2.32",
     "geopandas>=1.0",
     "shapely>=2.0",
@@ -59,7 +59,7 @@ Issues = "https://github.com/SINTEF-agentlab/jutul-agent/issues"
 
 [project.scripts]
 jutul-agent = "jutul_agent.__main__:main"
-geoagent = "energy_demand_app.__main__:main"
+geoagent = "geoagent_app.__main__:main"
 
 [project.optional-dependencies]
 eval = [
@@ -102,19 +102,19 @@ source = "vcs"
 version-file = "src/jutul_agent/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jutul_agent", "energy_demand_app"]
+packages = ["src/jutul_agent", "geoagent_app"]
 # The web UI ships pre-built (interfaces/server/web_dist). Its React/TS source and
 # node_modules under interfaces/server/webapp are dev-only — never ship them.
-# energy_demand_app/workspace is runtime user data; .env holds secrets; scripts/
+# geoagent_app/workspace is runtime user data; .env holds secrets; scripts/
 # is an offline data-processing step not needed at runtime.
 exclude = [
     "src/jutul_agent/interfaces/server/webapp",
-    "energy_demand_app/workspace",
-    "energy_demand_app/.env",
-    "energy_demand_app/scripts",
-    "energy_demand_app/README.md",
-    "energy_demand_app/.gitignore",
-    "energy_demand_app/__pycache__",
+    "geoagent_app/workspace",
+    "geoagent_app/.env",
+    "geoagent_app/scripts",
+    "geoagent_app/README.md",
+    "geoagent_app/.gitignore",
+    "geoagent_app/__pycache__",
 ]
 
 # Whitelist what ships in the source distribution. Keeps local development

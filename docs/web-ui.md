@@ -95,7 +95,7 @@ shows up on session start, not on the first turn. Pass `silent=True` to
 `protocol.viz_to_wire` (or set `"silent": True` on an artifact's payload) so
 the front end pins the view without adding a chat-thread reference for it —
 pinning isn't a conversation event. See
-`energy_demand_app/capability.py`'s `_ensure_map_pinned`.
+`geoagent_app/capability.py`'s `_ensure_map_pinned`.
 
 ## Producing an interactive plot from a tool
 

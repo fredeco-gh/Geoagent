@@ -25,7 +25,7 @@ using PythonCall
 using Base64
 import CairoMakie
 
-# Add the energy_demand_app directory to Python sys.path so pygfunction_sim
+# Add the geoagent_app directory to Python sys.path so pygfunction_sim
 # is importable when the include() resolves relative to this julia/ sub-dir.
 let
     pysys   = pyimport("sys")
