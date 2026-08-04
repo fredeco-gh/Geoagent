@@ -33,11 +33,5 @@ FIMBUL = SimulatorAdapter(
         "Geothermal on the Darcy stack: the reservoir ranges apply, plus temperatures "
         "in Kelvin within sensible bounds."
     ),
-    example_prompts=(
-        "Run the geothermal doublet demo and show the temperature field around the "
-        "wells over time.",
-        "Plot the produced fluid temperature versus time.",
-        "Set up an ATES seasonal storage case and explain the cycle.",
-        "Compare the analytical 1D heat solution with the simulated result.",
-    ),
+    example_prompts=(),
 )

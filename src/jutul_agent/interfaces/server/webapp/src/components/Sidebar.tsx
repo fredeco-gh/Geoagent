@@ -18,7 +18,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
       <div className="sidebar-head">
         <span className="brand">
-          <span className="brand-mark" /> jutul-agent
+          <span className="brand-mark" /> Geoagent
         </span>
       </div>
       <button className="sidebar-new" title="Start a new chat" onClick={() => controller.newChat()}>

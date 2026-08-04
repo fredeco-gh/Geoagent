@@ -35,13 +35,13 @@ function Welcome() {
   const controller = useController();
   const d = sim ? details[sim] : undefined;
   const display = d?.display_name || sim;
-  const prompts = d?.examples && d.examples.length ? d.examples : DEFAULT_EXAMPLES;
+  const prompts = d ? (d.examples ?? DEFAULT_EXAMPLES) : DEFAULT_EXAMPLES;
   return (
     <div className="welcome">
-      <h1>{display ? `What would you like to explore with ${display}?` : "What would you like to explore?"}</h1>
+      <h1>{display ? `What would you like to explore with Geoagent?` : "What would you like to explore?"}</h1>
       <p>
-        Ask a question or describe a task. The agent runs the simulator, writes and runs Julia, and
-        shows results here.
+        Ask a question or describe a task. The agent can interact with the map, run simulatons, write and run Julia, and
+        show and describe the results here.
       </p>
       <div className="examples">
         {prompts.map((t) => (

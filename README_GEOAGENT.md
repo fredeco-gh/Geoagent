@@ -6,6 +6,8 @@
 
 An AI-powered geothermal planning tool for Norwegian borehole fields and building energy systems. Geoagent combines an interactive map of Norwegian borehole data, building heating-demand estimation, physics-based borehole simulation, and full Fimbul PDE reservoir simulation — all driven by a conversational AI agent or by direct UI controls.
 
+Geoagent is developed on top of [jutul-agent](https://github.com/SINTEF-agentlab/jutul-agent), the open-source scientific AI agent framework by [SINTEF](https://www.sintef.no/en/). The interactive map is based on GeothermalViz, also developed by SINTEF.
+
 <p align="center">
   <img src="docs/images/web-fimbul.png" alt="Geoagent: Fimbul well simulation with 3D temperature field" width="47%">
   &nbsp;&nbsp;&nbsp;
@@ -105,7 +107,7 @@ The split between pygfunction (fast, approximate) and Fimbul (slow, physics-accu
 
 ## Agent tools
 
-The agent has the following tools at its disposal. They are wired in through `energy_demand_app/capability.py` and exposed automatically at session start. This list may be useful to get a feeling for what the agent can do. 
+The agent has the following extra tools at its disposal in addition to the same capabilities as jutul-agent. They are wired in through `energy_demand_app/capability.py` and exposed automatically at session start. This list may be useful to get a sense for what the agent can do. 
 
 ### Map navigation
 

@@ -140,13 +140,18 @@ def main() -> int:
     # Unlike `jutul-agent web`, this script doesn't go through the CLI's main(),
     # which is the only place .env normally gets loaded — so provider API keys
     # (e.g. OPENAI_API_KEY) would otherwise never reach the process.
-    # Walk up from this script's directory to find the nearest .env file.
+    # Load the global key store first (set by `geoagent key …`), then let any
+    # project-local .env override it (walk up from this script's directory).
     from dotenv import load_dotenv
+
+    from jutul_agent.credentials import load_user_credentials
+
+    load_user_credentials()
 
     _search = EXAMPLE_DIR
     while _search != _search.parent:
         if (_search / ".env").exists():
-            load_dotenv(_search / ".env")
+            load_dotenv(_search / ".env", override=True)
             break
         _search = _search.parent
 
