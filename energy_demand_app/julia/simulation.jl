@@ -1,4 +1,4 @@
-﻿"""
+"""
     Simulation parameter mapping layer
 
 Maps well metadata from the Norwegian borehole database to Fimbul.jl
@@ -378,6 +378,13 @@ end
 """Run simulation using Fimbul.jl."""
 function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
     try
+        # Release previous simulation data so the GC can reclaim the memory
+        # before building the new case (important after large BTES runs).
+        _sim_case[]   = nothing
+        _sim_states[] = nothing
+        _sim_state0[] = nothing
+        GC.gc(true)
+
         _sim_log_push!("Initializing $case_type simulation...")
 
         # Note: num_segments controls the 3D wellbore visualisation only
@@ -428,7 +435,7 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
             return Dict("status" => "error", "message" => "Unknown case type: $case_type")
         end
 
-        _sim_log_push!("Case created. Starting reservoir simulation...")
+        _sim_log_push!("Case created. Starting reservoir simulation ($(length(case.dt)) scheduled steps)...")
         _sim_log_push!("This may take several minutes depending on model size.")
 
         # Fimbul's own progress output (progress bars etc.) goes straight to
@@ -436,7 +443,38 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
         # long-running Julia computation — no manual capture needed here.
         # info_level=-1 suppresses JutulDarcy's browser-based reservoir viewer
         # (WGLMakie/Bonito), which would otherwise open a new browser tab.
-        results = Fimbul.simulate_reservoir(case; info_level = -1)
+        if case_type == "BTES"
+            local _btes_sim, _btes_cfg = JutulDarcy.setup_reservoir_simulator(case;
+                presolve_wells  = true,
+                relaxation      = true,
+                tol_cnv         = 1e-2,
+                tol_mb          = 1e-6,
+                tol_cnve_well   = Inf,
+                inc_tol_dT      = 1e-2,
+                timesteps       = :auto,
+                initial_dt      = 5.0,
+                target_its      = 10,
+                info_level      = -1,
+            )
+            local _btes_sel = JutulDarcy.ControlChangeTimestepSelector(
+                case.model, 0.0, Fimbul.convert_to_si(5.0, :second))
+            push!(_btes_cfg[:timestep_selectors], _btes_sel)
+            _btes_cfg[:timestep_max_decrease] = 1e-6
+            results = Fimbul.simulate_reservoir(case;
+                simulator = _btes_sim,
+                config    = _btes_cfg,
+                info_level = -1,
+            )
+        else
+            results = Fimbul.simulate_reservoir(case; info_level = -1)
+        end
+
+        if isempty(results.states)
+            return Dict{String,Any}(
+                "status"  => "error",
+                "message" => "Simulation produced no output states — all timesteps failed to converge. Check parameter values or contact support.",
+            )
+        end
 
         _sim_log_push!("Simulation completed. Extracting results...")
 
@@ -798,6 +836,13 @@ function run_btes_validation(setup::AbstractDict)
         _sim_log_push!("Starting Fimbul validation simulation...")
 
         results = simulate_reservoir(JutulCase(model, dt_vec, forces_vec, state0=state0); info_level = -1)
+
+        if isempty(results.states)
+            return Dict{String,Any}(
+                "status"  => "error",
+                "message" => "Validation simulation produced no output states — all timesteps failed to converge.",
+            )
+        end
 
         _sim_log_push!("Simulation done. Extracting results...")
 

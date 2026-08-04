@@ -1,4 +1,4 @@
-"""Fimbul adapter."""
+﻿"""Fimbul adapter."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ FIMBUL = SimulatorAdapter(
         "It augments Darcy flow with an energy-conservation equation, "
         "transporting heat by advection and conduction. Typical workflow: a "
         "case factory (e.g. `egg_geothermal_doublet()`, `doublet_demo()`, "
-        "`ates_demo()`) returns a `JutulCase` → `simulate_reservoir(case)` → "
-        "inspect states (key field is `:Temperature`). Examples live under "
+        "`ates_demo()`) returns a `JutulCase` â†’ `simulate_reservoir(case)` â†’ "
+        "inspect states (reservoir state key is `:Temperature`; well output key is `:temperature` lowercase, e.g. `results.wells[:B1_supply][:temperature]`). Examples live under "
         "`examples/` in the installed source (`pkgdir(Fimbul)`) in three groups: "
         "`analytical/`, `production/` (doublet, EGS, AGS, coaxial BHE), and "
         "`storage/` (ATES, BTES, FTES, HTATES). Most workflows reuse "
