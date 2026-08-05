@@ -95,15 +95,15 @@ shows up on session start, not on the first turn. Pass `silent=True` to
 `protocol.viz_to_wire` (or set `"silent": True` on an artifact's payload) so
 the front end pins the view without adding a chat-thread reference for it —
 pinning isn't a conversation event. See
-`examples/geothermal-map/capability.py`'s `_ensure_map_pinned`.
+`geoagent_app/capability.py`'s `_ensure_map_pinned`.
 
 ## Producing an interactive plot from a tool
 
 A view does not always need a custom panel. The simplest interactive plot is a tool
 that renders a Makie figure and writes it as self-contained HTML, which the canvas
 shows in an iframe. Getting the WGLMakie and Bonito wiring right is the fiddly part,
-so the demo example is the reference: its `plot_response` tool renders a WGLMakie
+so the `plot_julia` built-in tool is the reference implementation: it renders a WGLMakie
 figure and exports it with `Bonito.export_static`, then records it as an artifact
-that the canvas pins automatically. See `examples/demo-app`. The built-in
+that the canvas pins automatically. The built-in
 `plot_julia` tool serves a live, fully interactive figure the same way, kept
 offscreen so no native window opens.

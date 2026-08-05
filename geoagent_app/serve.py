@@ -16,29 +16,40 @@ the first place.
 
 This example runs on jutul-agent's built-in ``fimbul`` simulator and its
 already-declared Julia environment — no extra Julia setup of its own. Run it
-with ``python examples/geothermal-map/serve.py``.
+with ``python geoagent_app/serve.py`` from the repo root.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
+# Must be set before any Julia subprocess starts so PythonCall uses the
+# project venv directly instead of spinning up a CondaPkg/pixi environment,
+# which hangs indefinitely when the pixi lock file is missing or stale.
+os.environ.setdefault("JULIA_CONDAPKG_BACKEND", "Null")
+os.environ.setdefault("JULIA_PYTHONCALL_EXE", sys.executable)
+
 EXAMPLE_DIR = Path(__file__).resolve().parent
+# Flat imports (capability, backend_building_selection, …) work when running
+# directly because Python adds the script's directory to sys.path automatically.
+# When installed as a package entry point that doesn't happen, so we add it here.
+sys.path.insert(0, str(EXAMPLE_DIR))
+
 DATA_DIR = EXAMPLE_DIR / "data"
 DATA_PATH = DATA_DIR / "all_boreholes.geojson"
 SIMULATION_JL = EXAMPLE_DIR / "julia" / "simulation.jl"
+PYGSIM_JL = EXAMPLE_DIR / "julia" / "pygfunction_sim.jl"
 
-# Pinned rather than left to default to the launching shell's cwd: a session's
-# Julia env (and its precompile-done marker) lives under <workspace>/.jutul-agent/,
-# so if this varied by which directory you happened to run this script from,
-# every run with a different cwd would bootstrap and precompile a brand new
-# env from scratch.
-WORKSPACE = EXAMPLE_DIR / "workspace"
+# User-writable, install-independent workspace. Placing it here (rather than
+# relative to EXAMPLE_DIR) means reinstalling the tool doesn't wipe the Julia
+# env that jutil-agent init already compiled (~10 min).
+WORKSPACE = Path.home() / ".geoagent" / "workspace"
 
 HOST = "127.0.0.1"
-PORT = 8742
+PORT = 8740
 
 
 async def _host_factory(
@@ -66,7 +77,7 @@ async def _host_factory(
         resume=resume,
         session_id=session_id,
         extensions=[
-            geothermal_map_capability(str(DATA_PATH), str(SIMULATION_JL)),
+            geothermal_map_capability(str(DATA_PATH), str(SIMULATION_JL), str(PYGSIM_JL)),
             *extensions,
         ],
     )
@@ -75,7 +86,17 @@ async def _host_factory(
 
 
 def create_geothermal_map_app() -> Any:
-    from capability import make_run_simulation_action, make_setup_simulation_action
+    from backend_building_selection import (
+        make_generate_energy_demands_action,
+    )
+    from backend_building_selection import (
+        router as building_router,
+    )
+    from capability import (
+        make_run_simulation_action,
+        make_setup_simulation_action,
+        make_track_selected_well_action,
+    )
 
     from jutul_agent.interfaces.server.app import create_app
     from jutul_agent.interfaces.server.manager import SessionManager
@@ -97,9 +118,15 @@ def create_geothermal_map_app() -> Any:
         # (see ActionHandler), bypassing the model — it has nothing to decide
         # for either: setup is a metadata lookup, run uses the form's own values.
         actions={
-            "run_simulation": make_run_simulation_action(str(SIMULATION_JL)),
-            "setup_simulation": make_setup_simulation_action(str(SIMULATION_JL)),
+            "run_simulation":         make_run_simulation_action(str(SIMULATION_JL)),
+            "setup_simulation":       make_setup_simulation_action(str(SIMULATION_JL)),
+            "track_selected_well":    make_track_selected_well_action(str(SIMULATION_JL)),
+            "generate_energy_demands": make_generate_energy_demands_action(),
         },
+        # Building click API — must be passed here (not via include_router after
+        # the fact) so it is registered before create_app mounts the static
+        # catch-all at "/", which would otherwise swallow these routes first.
+        extra_routes=building_router,
     )
 
 
@@ -113,9 +140,20 @@ def main() -> int:
     # Unlike `jutul-agent web`, this script doesn't go through the CLI's main(),
     # which is the only place .env normally gets loaded — so provider API keys
     # (e.g. OPENAI_API_KEY) would otherwise never reach the process.
+    # Load the global key store first (set by `geoagent key …`), then let any
+    # project-local .env override it (walk up from this script's directory).
     from dotenv import load_dotenv
 
-    load_dotenv()
+    from jutul_agent.credentials import load_user_credentials
+
+    load_user_credentials()
+
+    _search = EXAMPLE_DIR
+    while _search != _search.parent:
+        if (_search / ".env").exists():
+            load_dotenv(_search / ".env", override=True)
+            break
+        _search = _search.parent
 
     print(f"Starting jutul-agent with the geothermal map on http://{HOST}:{PORT} ...")
     uvicorn.run(create_geothermal_map_app(), host=HOST, port=PORT)

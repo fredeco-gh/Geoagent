@@ -103,8 +103,8 @@ speaks it. Two starting points:
 - **Use the bundled UI.** `jutul-agent web --sim mysim` serves a complete chat
   interface. Good for getting going and for internal tools.
 - **Build your own.** Code against the protocol with whatever stack your app
-  needs (React, Svelte, MapLibre, ...). The bundled UI and the `examples/`
-  app are reference implementations to copy.
+  needs (React, Svelte, MapLibre, ...). The bundled UI and `geoagent_app/`
+  are reference implementations to copy.
 
 Interactive plots come back over the protocol as a `viz` (a self-contained
 WebGL/WGLMakie HTML you embed) and as image artifacts; the agent builds the

@@ -18,10 +18,11 @@ Typical workflow:
 
 using Fimbul
 using Dates
-using CairoMakie
 using Jutul
 using JutulDarcy
 import Base64: base64encode
+# CairoMakie is loaded separately (see _start_cairo_warmup in capability.py)
+# so that including this file doesn't block the Julia kernel during session start.
 
 # ── Server-side state for lazy reservoir image rendering ─────────────────────
 
@@ -112,7 +113,8 @@ Keys: label, unit, min, max, step, tooltip, group.
 """
 const PARAM_METADATA = Dict{String,Dict{String,Any}}(
     # Well / geometry
-    "well_depth"                => Dict{String,Any}("label" => "Well depth",                "unit" => "m",       "min" => 10,    "max" => 8000,  "step" => 10,    "tooltip" => "Total drilled depth of the well",                           "group" => "Well Geometry"),
+    "well_length"                => Dict{String,Any}("label" => "Well length (H)",           "unit" => "m",       "min" => 10,    "max" => 8000,  "step" => 10,    "tooltip" => "Active borehole length (from top to bottom of heat-exchange section)", "group" => "Well Geometry"),
+    "borehole_start_depth"      => Dict{String,Any}("label" => "Start depth (D)",           "unit" => "m",       "min" => 0.0,   "max" => 100.0, "step" => 0.1,   "tooltip" => "Depth from surface to top of the active borehole section",  "group" => "Well Geometry"),
     "borehole_diameter"         => Dict{String,Any}("label" => "Borehole diameter",         "unit" => "mm",      "min" => 50,    "max" => 500,   "step" => 1,     "tooltip" => "Diameter of the borehole",                                   "group" => "Well Geometry"),
     # Rock properties
     "surface_temperature"       => Dict{String,Any}("label" => "Surface temperature",       "unit" => "°C",      "min" => -10,   "max" => 40,    "step" => 0.5,   "tooltip" => "Mean annual temperature at the surface",                     "group" => "Rock Properties"),
@@ -139,14 +141,14 @@ const PARAM_METADATA = Dict{String,Dict{String,Any}}(
 """Parameter keys used for each case type, in display order."""
 const CASE_PARAMS = Dict{SimCaseType, Vector{String}}(
     SIM_AGS => [
-        "well_depth", "borehole_diameter",
+        "well_length", "borehole_start_depth", "borehole_diameter",
         "surface_temperature", "geothermal_gradient",
         "rock_thermal_conductivity", "rock_heat_capacity",
         "porosity", "permeability",
         "temperature_inj", "flow_rate", "num_segments", "num_years",
     ],
     SIM_BTES => [
-        "well_depth", "num_wells_btes", "num_sectors", "well_spacing",
+        "well_length", "borehole_start_depth", "num_wells_btes", "num_sectors", "well_spacing",
         "surface_temperature", "geothermal_gradient",
         "rock_thermal_conductivity", "rock_heat_capacity",
         "temperature_charge", "temperature_discharge",
@@ -156,14 +158,15 @@ const CASE_PARAMS = Dict{SimCaseType, Vector{String}}(
 
 """Default values for all parameters."""
 const PARAM_DEFAULTS = Dict{String,Any}(
-    "well_depth"                => 200.0,
+    "well_length"                => 200.0,
+    "borehole_start_depth"      => 0.5,
     "borehole_diameter"         => 140.0,
     "temperature_inj"           => 25.0,
     "flow_rate"                 => 25.0,
     "num_years"                 => 25,
     "num_segments"              => 10,
     "num_wells_btes"            => 48,
-    "num_sectors"               => 6,
+    "num_sectors"               => 4,
     "well_spacing"              => 5.0,
     "temperature_charge"        => 90.0,
     "temperature_discharge"     => 10.0,
@@ -253,7 +256,7 @@ end
 """Resolve a single parameter from well metadata or defaults."""
 function _resolve_param(key, depth, diameter, n_energy_wells, heating_power)
     # Well geometry — from data when available
-    if key == "well_depth" && depth !== nothing
+    if key == "well_length" && depth !== nothing
         return (depth, "data")
     end
     if key == "borehole_diameter" && diameter !== nothing
@@ -325,19 +328,26 @@ function validate_simulation_params(params::AbstractDict)
         end
     end
 
-    # Fimbul.btes divides wells evenly into num_sectors and special-cases the
-    # innermost/outermost well of each sector — a sector left with exactly one
-    # well hits both special cases at once and Fimbul indexes past the end of a
-    # 1-element array. Catch it here with a clear message instead of a bare
-    # BoundsError from inside the simulator.
+    # Each sector must have at least one well — fewer wells than sectors leaves
+    # some sectors empty, which Fimbul cannot handle.
+    # Use the actual pattern-level N when provided (from UI layout controls),
+    # falling back to the form parameter num_wells_btes.
     if case_type == "BTES"
-        n = _numeric(get(parameters, "num_wells_btes", nothing))
+        n1_raw = get(params, "num_wells_1", nothing)
+        n = if n1_raw !== nothing
+            _n1 = round(Int, _numeric(n1_raw))
+            n2_raw = get(params, "num_wells_2", nothing)
+            pat = string(get(params, "pattern", "sunflower"))
+            (pat == "rectangular" && n2_raw !== nothing) ? _n1 * round(Int, _numeric(n2_raw)) : _n1
+        else
+            _numeric(get(parameters, "num_wells_btes", nothing))
+        end
         s = _numeric(get(parameters, "num_sectors", nothing))
-        if n !== nothing && s !== nothing && s > 0 && n < 2 * s
+        if n !== nothing && s !== nothing && s > 0 && n < s
             push!(errors, ("num_wells_btes",
-                "Number of wells must be at least 2x the number of sectors " *
-                "(need $(round(Int, 2 * s)) wells for $(round(Int, s)) sectors, " *
-                "or fewer sectors) — each sector needs at least 2 wells"))
+                "Number of wells must be at least equal to the number of sectors " *
+                "(need $(round(Int, s)) wells for $(round(Int, s)) sectors, " *
+                "or fewer sectors) — each sector needs at least 1 well"))
         end
     end
 
@@ -362,18 +372,25 @@ function run_fimbul_simulation(setup::AbstractDict; mock::Bool=false)
         return _run_mock_simulation(case_type, params)
     end
 
-    return _run_fimbul_live(case_type, params)
+    return _run_fimbul_live(case_type, params, setup)
 end
 
 """Run simulation using Fimbul.jl."""
-function _run_fimbul_live(case_type, params)
+function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
     try
+        # Release previous simulation data so the GC can reclaim the memory
+        # before building the new case (important after large BTES runs).
+        _sim_case[]   = nothing
+        _sim_states[] = nothing
+        _sim_state0[] = nothing
+        GC.gc(true)
+
         _sim_log_push!("Initializing $case_type simulation...")
 
         # Note: num_segments controls the 3D wellbore visualisation only
         # and is not passed to the simulator.
         if case_type == "AGS"
-            _sim_log_push!("Creating AGS case with well depth=$(get(params, "well_depth", "?"))m...")
+            _sim_log_push!("Creating AGS case with well depth=$(get(params, "well_length", "?"))m...")
             case = Fimbul.ags(;
                 porosity                  = params["porosity"],
                 permeability              = params["permeability"] * 1e-3 * Fimbul.darcy,
@@ -386,11 +403,27 @@ function _run_fimbul_live(case_type, params)
                 num_years                 = round(Int, params["num_years"]),
             )
         elseif case_type == "BTES"
-            _sim_log_push!("Creating BTES case with $(get(params, "num_wells_btes", "?")) wells...")
-            case = Fimbul.btes(;
-                num_wells            = round(Int, params["num_wells_btes"]),
+            local _H   = Float64(get(params, "well_length", 200.0))
+            local _D   = Float64(get(params, "borehole_start_depth", 0.5))
+            local _tc  = Float64(get(params, "rock_thermal_conductivity", 3.0))
+            local _hc  = Float64(get(params, "rock_heat_capacity", 900.0))
+            local _pat = Symbol(get(setup, "pattern", "sunflower"))
+            # num_wells_1/2 come from the UI pattern controls when provided,
+            # falling back to the form's num_wells_btes / Fimbul default.
+            local _n1_raw = get(setup, "num_wells_1", nothing)
+            local _n1 = _n1_raw !== nothing ? round(Int, _n1_raw) : round(Int, get(params, "num_wells_btes", 48))
+            local _n2_raw = get(setup, "num_wells_2", nothing)
+            local _n2 = _n2_raw !== nothing ? round(Int, _n2_raw) : 6
+            _sim_log_push!("Creating BTES case: pattern=$(_pat), N₁=$(_n1), N₂=$(_n2), H=$(_H)m, D=$(_D)m...")
+            case = Fimbul.btes(_pat;
+                num_wells_1          = _n1,
+                num_wells_2          = _n2,
                 num_sectors          = round(Int, params["num_sectors"]),
                 well_spacing         = params["well_spacing"],
+                well_length          = _H,
+                min_depth            = _D,
+                thermal_conductivity = [0.034, _tc, _tc] .* Fimbul.watt / (Fimbul.meter * Fimbul.Kelvin),
+                heat_capacity        = [1500.0, _hc, _hc] .* Fimbul.joule / (Fimbul.kilogram * Fimbul.Kelvin),
                 temperature_charge   = Fimbul.convert_to_si(params["temperature_charge"], :Celsius),
                 temperature_discharge = Fimbul.convert_to_si(params["temperature_discharge"], :Celsius),
                 rate_charge          = params["rate_charge"] * Fimbul.litre / Fimbul.second,
@@ -402,13 +435,46 @@ function _run_fimbul_live(case_type, params)
             return Dict("status" => "error", "message" => "Unknown case type: $case_type")
         end
 
-        _sim_log_push!("Case created. Starting reservoir simulation...")
+        _sim_log_push!("Case created. Starting reservoir simulation ($(length(case.dt)) scheduled steps)...")
         _sim_log_push!("This may take several minutes depending on model size.")
 
         # Fimbul's own progress output (progress bars etc.) goes straight to
         # stdout; the caller's kernel eval streams it live, same as any other
         # long-running Julia computation — no manual capture needed here.
-        results = Fimbul.simulate_reservoir(case)
+        # info_level=-1 suppresses JutulDarcy's browser-based reservoir viewer
+        # (WGLMakie/Bonito), which would otherwise open a new browser tab.
+        if case_type == "BTES"
+            local _btes_sim, _btes_cfg = JutulDarcy.setup_reservoir_simulator(case;
+                presolve_wells  = true,
+                relaxation      = true,
+                tol_cnv         = 1e-2,
+                tol_mb          = 1e-6,
+                tol_cnve_well   = Inf,
+                inc_tol_dT      = 1e-2,
+                timesteps       = :auto,
+                initial_dt      = 5.0,
+                target_its      = 10,
+                info_level      = -1,
+            )
+            local _btes_sel = JutulDarcy.ControlChangeTimestepSelector(
+                case.model, 0.0, Fimbul.convert_to_si(5.0, :second))
+            push!(_btes_cfg[:timestep_selectors], _btes_sel)
+            _btes_cfg[:timestep_max_decrease] = 1e-6
+            results = Fimbul.simulate_reservoir(case;
+                simulator = _btes_sim,
+                config    = _btes_cfg,
+                info_level = -1,
+            )
+        else
+            results = Fimbul.simulate_reservoir(case; info_level = -1)
+        end
+
+        if isempty(results.states)
+            return Dict{String,Any}(
+                "status"  => "error",
+                "message" => "Simulation produced no output states — all timesteps failed to converge. Check parameter values or contact support.",
+            )
+        end
 
         _sim_log_push!("Simulation completed. Extracting results...")
 
@@ -502,7 +568,7 @@ function _run_mock_simulation(case_type, params)
     dt = range(0, n_years * DAYS_PER_YEAR; length=n_steps)
     timestamps = collect(Float64, dt)
 
-    depth = get(params, "well_depth", 200.0)
+    depth = get(params, "well_length", 200.0)
     T_surface = get(params, "surface_temperature", 7.0)
     gradient = get(params, "geothermal_gradient", 0.025)
     T_bottom = T_surface + gradient * depth
@@ -658,5 +724,161 @@ function render_reservoir_image(var::AbstractString, step::Int; delta::Bool=fals
         end
         @warn "Failed to render reservoir image for $var step $step (delta=$delta): $err_msg"
         return ""
+    end
+end
+
+# ── Fimbul validation (prescribed T_in from pygfunction) ──────────────────────
+
+"""
+    run_btes_validation(setup) -> Dict{String,Any}
+
+Run a Fimbul BTES simulation with a prescribed per-period injection temperature
+timeseries (T_in) derived from a prior pygfunction run. Returns T_out and
+extracted heat energy per period.
+
+Expected keys in `setup`:
+- `"num_boreholes"`, `"num_sectors"` — borehole field layout
+- `"H"`, `"B"` — active depth [m] and well spacing [m]
+- `"k_s"` — ground thermal conductivity [W/(m·K)]
+- `"T_surface_C"` — mean annual surface temperature [°C]
+- `"G"` — geothermal gradient [K/m]
+- `"m_flow_per_borehole"` — mass flow rate per sector [kg/s]
+- `"T_in_C"` — prescribed injection temperatures, one per period [°C]
+- `"durations_s"` — duration of each period [s]
+"""
+function run_btes_validation(setup::AbstractDict)
+    try
+        f64(k) = Float64(setup[k])
+        k_s   = f64("k_s")
+        alpha = f64("alpha")
+        T_surf_C, G = f64("T_surface_C"), f64("G")
+        m_flow, rho_f, cp_f = f64("m_flow_per_borehole"), f64("rho_fluid"), f64("cp_fluid")
+        T_in_C      = Float64.(setup["T_in_C"])
+        durations_s = Float64.(setup["durations_s"])
+        n_periods   = length(T_in_C)
+        @assert length(durations_s) == n_periods "T_in_C and durations_s must have equal length"
+
+        T_surf_K    = Fimbul.convert_to_si(T_surf_C, :Celsius)
+        G_SI        = G * Fimbul.Kelvin/Fimbul.meter
+        rate_SI     = m_flow / rho_f
+        T_in_mean_K = Fimbul.convert_to_si(sum(T_in_C) / n_periods, :Celsius)
+
+        # Parse field: list[sector][well] = [[x_top,y_top,z_top],[x_bot,y_bot,z_bot]]
+        # hcat converts each 2-point list into a 3×2 matrix (rows=x/y/z, cols=top/bottom)
+        field_json  = setup["field"]
+        field       = [[Float64.(hcat(wpts...)) for wpts in sector_pts] for sector_pts in field_json]
+        num_sectors = length(field)
+        num_wells   = sum(length(sector) for sector in field)
+        z_tops      = [wc[3, 1] for sector in field for wc in sector]
+        z_bottoms   = [wc[3, 2] for sector in field for wc in sector]
+        D_min       = minimum(z_tops)
+        max_depth   = maximum(z_bottoms)
+        depths      = [0.0, D_min, max_depth, max_depth + 15.0]
+        rock_density = 2580.0
+        rock_cp      = k_s / (alpha * rock_density)
+
+        _sim_log_push!("Building BTES model: $num_wells wells, $num_sectors sectors, field-based...")
+
+        # Call btes() with a 1-year dummy schedule purely to obtain the model,
+        # state0, and sectors dict. The schedule is discarded immediately.
+        dummy = btes(
+            field;
+            depths                = depths,
+            density               = [30.0, rock_density, rock_density] .* Fimbul.kilogram/Fimbul.meter^3,
+            thermal_conductivity  = [0.034, k_s, k_s] .* Fimbul.watt/Fimbul.meter/Fimbul.Kelvin,
+            heat_capacity         = [1500.0, rock_cp, rock_cp] .* Fimbul.joule/Fimbul.kilogram/Fimbul.Kelvin,
+            geothermal_gradient   = G_SI,
+            temperature_charge    = T_in_mean_K,
+            temperature_discharge = T_in_mean_K,
+            rate_charge           = rate_SI,
+            temperature_surface   = T_surf_K,
+            num_years             = 1,
+        )
+        model, state0, sectors = dummy.model, dummy.state0, dummy.input_data[:sectors]
+
+        # Reconstruct boundary conditions matching btes.jl: top + sides, not bottom
+        bc, _, _ = Fimbul.set_dirichlet_bcs(
+            model, [:top, :sides];
+            temperature_surface = T_surf_K,
+            geothermal_gradient = G_SI,
+            output_state        = false,
+        )
+
+        rho      = reservoir_model(model).system.rho_ref[1]
+        rate_tgt = TotalRateTarget(rate_SI)
+        bhp_tgt  = BottomHolePressureTarget(1.0Jutul.si_unit(:atm))
+        is_sup(w) = endswith(String(w), "_supply")
+        is_ret(w) = endswith(String(w), "_return")
+
+        # Build one force set per period — only injection temperature varies
+        forces_list = Any[]
+        for T_C in T_in_C
+            T_K  = Fimbul.convert_to_si(T_C, :Celsius)
+            ctrl = Dict()
+            for (_, sec_wells) in pairs(sectors)
+                supply = filter(is_sup, collect(sec_wells))
+                retrn  = filter(is_ret, collect(sec_wells))
+                for (k, w_sup) in enumerate(supply)
+                    ctrl[w_sup] = k == 1 ?
+                        InjectorControl(rate_tgt, [1.0], density=rho, temperature=T_K) :
+                        InjectorControl(JutulDarcy.ReinjectionTarget([retrn[k-1]]), [1.0],
+                            density=rho, temperature=NaN; check=false)
+                    ctrl[retrn[k]] = ProducerControl(bhp_tgt)
+                end
+            end
+            push!(forces_list, setup_reservoir_forces(model, control=ctrl, bc=bc))
+        end
+
+        # One report per period so results index 1-to-1 with T_in_C
+        dt_vec, forces_vec, _ = make_schedule(forces_list, durations_s; num_reports=1)
+
+        _sim_log_push!("Schedule: $n_periods periods, $(round(sum(durations_s)/86400; digits=1)) days total.")
+        _sim_log_push!("Starting Fimbul validation simulation...")
+
+        results = simulate_reservoir(JutulCase(model, dt_vec, forces_vec, state0=state0); info_level = -1)
+
+        if isempty(results.states)
+            return Dict{String,Any}(
+                "status"  => "error",
+                "message" => "Validation simulation produced no output states — all timesteps failed to converge.",
+            )
+        end
+
+        _sim_log_push!("Simulation done. Extracting results...")
+
+        # T_out = outlet of the last return well in each sector, averaged across sectors.
+        # sectors[:Sk] = [supply_1, return_1, ..., supply_n, return_n], so [end] is the sector outlet.
+        T_out_K = sum(
+            collect(Float64, results.wells[filter(is_ret, collect(sw))[end]][:temperature])
+            for (_, sw) in pairs(sectors)
+        ) ./ length(sectors)
+        T_out_C = Fimbul.convert_from_si.(T_out_K, :Celsius)
+
+        # Extracted energy per period [kWh] = N_sectors · ṁ · cp · ΔT · Δt
+        energy_kWh = [
+            num_sectors * m_flow * cp_f * (T_out_C[i] - T_in_C[i]) * durations_s[i] / 3.6e6
+            for i in 1:n_periods
+        ]
+
+        total_kWh = sum(energy_kWh)
+        _sim_log_push!("Total extracted energy: $(round(total_kWh; digits=1)) kWh.")
+
+        return Dict{String,Any}(
+            "status"           => "completed",
+            "T_in_C"           => collect(T_in_C),
+            "T_out_C"          => collect(T_out_C),
+            "energy_kWh"       => collect(energy_kWh),
+            "durations_s"      => collect(durations_s),
+            "total_energy_kWh" => total_kWh,
+            "n_periods"        => n_periods,
+        )
+    catch e
+        bt  = catch_backtrace()
+        msg = sprint(showerror, e, bt)
+        _sim_log_push!("ERROR: $msg")
+        return Dict{String,Any}(
+            "status"  => "error",
+            "message" => "Validation failed: $msg",
+        )
     end
 end

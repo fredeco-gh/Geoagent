@@ -1,4 +1,4 @@
----
+﻿---
 name: fimbul-overview
 description: High-level Fimbul workflow, geothermal case factories, and result inspection
 ---
@@ -73,17 +73,34 @@ and `jutuldarcy-wells` for well construction details that apply here too.
 
 Produced-water quantities come from the well series, not the reservoir
 field: `result.states[end][:Temperature]` is the grid; what a well delivers
-over time is
+over time is in `result.wells`.
+
+**Always probe before indexing** — well names and available outputs vary by
+case. `result.wells` is a `WellResults` struct; its inner dict is
+`result.wells.wells`:
 
 ```julia
-prod_T = result.wells.wells[:Producer][:temperature]   # K, one value per step
+wnames  = keys(result.wells.wells)          # e.g. (:Injector, :Producer)
+outputs = keys(result.wells.wells[first(wnames)])  # e.g. (:bhp, :temperature, :rate, ...)
 ```
 
-(`keys(result.wells.wells)` lists the well names of the active case.)
+`:temperature` is only present when the reservoir solved a temperature field
+(i.e. `haskey(first(result.states)[:Reservoir], :Temperature)`). Check
+before accessing:
+
+```julia
+wname = :Producer                            # use a Symbol, not a String
+wdata = result.wells.wells[wname]
+if haskey(wdata, :temperature)
+    prod_T = wdata[:temperature]   # K, one value per step; convert: prod_T .- 273.15
+else
+    @warn "no :temperature for " * string(wname) * " — available: " * string(keys(wdata))
+end
+```
 
 All quantities are SI: temperatures are **Kelvin**, not Celsius. When the
-user asks for degrees Celsius, convert (`T - 273.15`) before reporting; a
-"temperature" near 350 in a geothermal answer is almost certainly an
+user asks for degrees Celsius, convert (`T .- 273.15`) before reporting; a
+“temperature” near 350 in a geothermal answer is almost certainly an
 unconverted Kelvin value.
 
 ## Plotting

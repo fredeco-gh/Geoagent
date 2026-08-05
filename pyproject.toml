@@ -37,6 +37,18 @@ dependencies = [
     # Used directly by the declarative HTTP tools (agent/capabilities.py) to call a
     # host application's endpoints.
     "httpx>=0.27",
+    # Geospatial and data processing (geoagent_app and similar examples).
+    "requests>=2.32",
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "pyproj>=3.6",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "cdsapi>=0.7",
+    "xarray>=2024.1",
+    "netcdf4>=1.7",
+    "pygfunction>=2.2",
+    "matplotlib>=3.7",
 ]
 
 [project.urls]
@@ -47,6 +59,7 @@ Issues = "https://github.com/SINTEF-agentlab/jutul-agent/issues"
 
 [project.scripts]
 jutul-agent = "jutul_agent.__main__:main"
+geoagent = "geoagent_app.__main__:main"
 
 [project.optional-dependencies]
 eval = [
@@ -89,10 +102,20 @@ source = "vcs"
 version-file = "src/jutul_agent/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jutul_agent"]
+packages = ["src/jutul_agent", "geoagent_app"]
 # The web UI ships pre-built (interfaces/server/web_dist). Its React/TS source and
 # node_modules under interfaces/server/webapp are dev-only — never ship them.
-exclude = ["src/jutul_agent/interfaces/server/webapp"]
+# geoagent_app/workspace is runtime user data; .env holds secrets; scripts/
+# is an offline data-processing step not needed at runtime.
+exclude = [
+    "src/jutul_agent/interfaces/server/webapp",
+    "geoagent_app/workspace",
+    "geoagent_app/.env",
+    "geoagent_app/scripts",
+    "geoagent_app/README.md",
+    "geoagent_app/.gitignore",
+    "geoagent_app/__pycache__",
+]
 
 # Whitelist what ships in the source distribution. Keeps local development
 # scratch directories at the repo root from ever leaking into a release.

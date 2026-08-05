@@ -1,4 +1,4 @@
-// The geothermal map as a native canvas panel — see docs/web-ui.md's
+﻿// The geothermal map as a native canvas panel — see docs/web-ui.md's
 // "Extending the canvas". Ported from geothermal-viz's web/js/app.js
 // (rendering: layers, popups, well info, terrain/3D buildings) onto the
 // generic `ui`/`ui_event` wire Phase 0 proved (canvas/registry.tsx's
@@ -15,9 +15,10 @@
 
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./MapPanel.css";
+import { computeBtesBoreholes } from "./boreholePatterns";
 import type { PanelProps } from "./registry";
 import { useUiActions } from "./registry";
 import { createWellbore3D, type Wellbore3D } from "./wellbore3d";
@@ -97,6 +98,40 @@ const FIELD_LABELS: Record<string, string> = {
   geolMedium: "Geological Medium",
 };
 
+interface SelectedBuilding {
+  bygningsnummer: string;
+  bygningstype?: string;
+  bygningstype_kode?: number;
+  bygningsstatus?: string;
+  kommunenummer?: string;
+  kommunenavn?: string;
+  lat: number;
+  lon: number;
+  distance_m: number;
+  bruksareal_totalt?: number;
+  bruksareal_til_bolig?: number;
+  bruksareal_til_annet?: number;
+  antall_boenheter?: number;
+}
+
+interface BuildingClickResult {
+  hit: boolean;
+  selected?: SelectedBuilding;
+}
+
+interface TemperatureRecord {
+  time_oslo: string;
+  temperature_C: number;
+}
+
+interface BuildingTemperatureData {
+  lat: number;
+  lon: number;
+  year: number;
+  hours: number;
+  records: TemperatureRecord[];
+}
+
 interface SelectedWell {
   title: string;
   color: string;
@@ -166,6 +201,43 @@ function formatDate(value: unknown): string {
   return d.toLocaleDateString("en-GB", { year: "numeric", month: "short", day: "numeric" });
 }
 
+function polygonCentroid(rings: [number, number][][]): { lng: number; lat: number } {
+  const ring = rings[0];
+  let lng = 0, lat = 0;
+  for (const [x, y] of ring) { lng += x; lat += y; }
+  return { lng: lng / ring.length, lat: lat / ring.length };
+}
+
+function pointInRing(px: number, py: number, ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// When a hover feature is a MultiPolygon (adjacent buildings merged into one
+// OSM way), extract only the sub-polygon the cursor actually sits inside.
+function hoverGeometry(
+  geom: { type: string; coordinates: unknown },
+  lngLat: { lng: number; lat: number },
+): { type: string; coordinates: unknown } {
+  const [px, py] = [lngLat.lng, lngLat.lat];
+  if (geom.type === "MultiPolygon") {
+    const polys = geom.coordinates as [number, number][][][];
+    for (const poly of polys) {
+      if (pointInRing(px, py, poly[0])) {
+        return { type: "Polygon", coordinates: poly };
+      }
+    }
+  }
+  return geom;
+}
+
 function describeFeature(props: Record<string, unknown>): { title: string; color: string; label: string } {
   const layerName = String(props.layer || "Unknown");
   const cfg = LAYER_CONFIG[layerName] ?? { id: "other", color: "#999", label: layerName };
@@ -191,6 +263,7 @@ const MAP_STYLE: maplibregl.StyleSpecification = {
 };
 
 export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAction }: PanelProps) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -201,17 +274,60 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
   const uiActions = useUiActions(view.id);
 
   const [selected, setSelected] = useState<SelectedWell | null>(null);
+  const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
+  const buildingTemperatureRef = useRef<BuildingTemperatureData | null>(null);
   // Mirrors `selected` for the ui-actions effect below, which must read the
   // currently selected well's lngLat without depending on (and re-running
   // for) every selection change.
   const selectedRef = useRef<SelectedWell | null>(null);
   selectedRef.current = selected;
-  const [total, setTotal] = useState(0);
-  const [byGroup, setByGroup] = useState<Record<string, number>>({});
   const [visibility, setVisibility] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(LAYER_GROUPS.map((g) => [g.id, true])),
   );
   const [collapsed, setCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [simPanelWidth, setSimPanelWidth] = useState(380);
+  const [energyPanelWidth, setEnergyPanelWidth] = useState(380);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const panelLeft = panelRef.current?.getBoundingClientRect().left ?? 0;
+    const onMove = (ev: MouseEvent) => {
+      setSidebarWidth(Math.max(220, Math.min(600, ev.clientX - panelLeft)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
+  const handleSimPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      setSimPanelWidth(Math.max(280, Math.min(700, window.innerWidth - ev.clientX)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
+  const handleEnergyPanelResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      setEnergyPanelWidth(Math.max(280, Math.min(700, window.innerWidth - ev.clientX)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
 
   // Setup Simulation sidebar panel: a well's resolved parameters arrive as a
   // targeted `simulation_params` ui action (see capability.py's
@@ -222,6 +338,39 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
   const [simParams, setSimParams] = useState<Record<string, number>>({});
   const [simError, setSimError] = useState<string | null>(null);
   const [simStatus, setSimStatus] = useState<SimStatus | null>(null);
+  const [simPattern, setSimPattern] = useState<string>("sunflower");
+  const [simBtesN, setSimBtesN] = useState<number>(16);
+  const [simBtesN1, setSimBtesN1] = useState<number>(4);
+  const [simBtesN2, setSimBtesN2] = useState<number>(4);
+  const [simBtesNumSides, setSimBtesNumSides] = useState<number>(6);
+
+  const [energyPanelOpen, setEnergyPanelOpen] = useState(false);
+  const [energyYear, setEnergyYear] = useState(2023);
+  const [energyFloorArea, setEnergyFloorArea] = useState<number | "">("");
+  const [energyBuildingCategory, setEnergyBuildingCategory] = useState("House");
+  const [energyEfficiencyKey, setEnergyEfficiencyKey] = useState("Reg");
+  const [energyDemandType, setEnergyDemandType] = useState<
+    "DHW" | "Space heating" | "Total thermal heating"
+  >("Total thermal heating");
+  const [energyStatus, setEnergyStatus] = useState<SimStatus | null>(null);
+
+  // Pre-fill the floor area input whenever the selected building changes.
+  useEffect(() => {
+    if (!selectedBuilding) return;
+    const code = selectedBuilding.bygningstype_kode;
+    if (code == null) {
+      setEnergyFloorArea("");
+      return;
+    }
+    const params = new URLSearchParams({ building_type_code: String(code) });
+    if (selectedBuilding.bruksareal_totalt != null) {
+      params.set("bruksareal_totalt", String(selectedBuilding.bruksareal_totalt));
+    }
+    fetch(`/api/building/default-floor-area?${params}`)
+      .then((r) => r.json())
+      .then((data) => setEnergyFloorArea(data.floor_area_m2 ?? ""))
+      .catch(() => setEnergyFloorArea(selectedBuilding.bruksareal_totalt ?? ""));
+  }, [selectedBuilding]);
 
   // A ref (not a plain function) so the mount effect below — which only runs
   // once per view.id — always calls the latest version, without needing to
@@ -231,8 +380,9 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     const { title, color, label } = describeFeature(props);
     const layerName = String(props.layer || "Unknown");
 
-    // A new selection retires any 3D wellbore shown for the previous one —
-    // mirrors geothermal-viz's own wellSelected handling in wellbore-3d.js.
+    setSelectedBuilding(null);
+    buildingTemperatureRef.current = null;
+    setEnergyPanelOpen(false);
     wellbore3dRef.current?.remove();
     popupRef.current?.remove();
     const map = mapRef.current;
@@ -263,10 +413,11 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     }
     setSelected({ title, color, label, rows, properties: props, layer: layerName, lngLat });
 
-    // Relay the selection to the agent — mirrors geothermal-viz's own
-    // wellSelected event (jutul-agent-bridge.js used to forward it over
-    // postMessage); now it's a plain ui_event over the session's own socket.
+    // Relay the selection to the agent as a ui_event (queued for next message).
     onUiEvent({ event: "wellSelected", properties: props, lngLat });
+    // Also cache the raw well properties server-side so get_selected_well_params
+    // can resolve parameter defaults from this well's metadata.
+    onAction("track_selected_well", props as Record<string, unknown>);
   };
 
   // "Back to this view" bumps `reloadToken` to force a stuck/stale panel to
@@ -289,6 +440,9 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     popupRef.current?.remove();
     popupRef.current = null;
     setSelected(null);
+    setSelectedBuilding(null);
+    buildingTemperatureRef.current = null;
+    setEnergyPanelOpen(false);
     mapRef.current?.flyTo({
       center: MAP_CENTER,
       zoom: MAP_ZOOM,
@@ -373,9 +527,6 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
             });
           }
 
-          setTotal(geojson.features.length);
-          setByGroup(Object.fromEntries(Object.entries(groups).map(([id, g]) => [id, g.features.length])));
-
           // Terrain/3D buildings are visual polish on free, keyless public
           // tile sources — best-effort, since the map is fully usable without
           // them if a source ever changes shape or goes away.
@@ -391,7 +542,52 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
             console.warn("Could not enable terrain:", err);
           }
           try {
-            map.addSource("openmaptiles", { type: "vector", url: "https://tiles.openfreemap.org/planet" });
+            // promoteId uses the OSM id property so setFeatureState targets
+            // exactly one building at a time instead of all with the same tile ID.
+            map.addSource("openmaptiles", {
+              type: "vector",
+              url: "https://tiles.openfreemap.org/planet",
+              promoteId: { building: "id" },
+            });
+            map.addLayer({
+              id: "building-footprints",
+              source: "openmaptiles",
+              "source-layer": "building",
+              type: "fill",
+              minzoom: 15,
+              paint: {
+                "fill-color": "rgba(0,0,0,0)",
+                "fill-opacity": 0,
+                "fill-outline-color": "#4a90d9",
+              },
+            });
+            map.addSource("hover-building", {
+              type: "geojson",
+              data: { type: "FeatureCollection", features: [] },
+            });
+            map.addLayer({
+              id: "building-hover-fill",
+              source: "hover-building",
+              type: "fill",
+              paint: { "fill-color": "#60a5fa", "fill-opacity": 0.7, "fill-outline-color": "#2563eb" },
+            });
+            map.on("mousemove", (e) => {
+              if (map.getZoom() < 15) return;
+              const hoverSource = map.getSource("hover-building") as maplibregl.GeoJSONSource | undefined;
+              if (!hoverSource) return;
+              const features = map.queryRenderedFeatures(e.point, { layers: ["building-footprints"] });
+              if (features.length > 0) {
+                map.getCanvas().style.cursor = "pointer";
+                const geom = hoverGeometry(features[0].geometry as { type: string; coordinates: unknown }, e.lngLat);
+                hoverSource.setData({
+                  type: "FeatureCollection",
+                  features: [{ type: "Feature" as const, geometry: geom as unknown, properties: {} }],
+                });
+              } else {
+                map.getCanvas().style.cursor = "";
+                hoverSource.setData({ type: "FeatureCollection", features: [] });
+              }
+            });
             map.addLayer({
               id: "3d-buildings",
               source: "openmaptiles",
@@ -415,6 +611,76 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           console.warn("Could not load borehole data:", err);
         })
         .finally(finishLoading);
+
+      // Building click: only at zoom >= 15, yields to well point clicks.
+      // Uses the clicked polygon's centroid for the Matrikkelen WFS lookup so
+      // any click inside the footprint works, not just near the registered point.
+      // Silently no-ops when the backend endpoint is not available.
+      const wellLayerIds = LAYER_GROUPS.map((g) => `layer-${g.id}`);
+      map.on("click", async (e) => {
+        if (map.getZoom() < 15) return;
+        if (map.queryRenderedFeatures(e.point, { layers: wellLayerIds }).length > 0) return;
+        // Prefer polygon centroid for accuracy; fall back to raw click coordinates
+        // when building-footprints tiles haven't loaded yet.
+        let lat = e.lngLat.lat;
+        let lon = e.lngLat.lng;
+        const buildingFeatures = map.queryRenderedFeatures(e.point, { layers: ["building-footprints"] });
+        if (buildingFeatures.length === 0) return;
+        const geom = hoverGeometry(
+          buildingFeatures[0].geometry as { type: string; coordinates: unknown },
+          e.lngLat,
+        );
+        if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+          const coords = geom.coordinates as [number, number][][] | [number, number][][][];
+          const rings = (geom.type === "Polygon" ? coords : (coords as [number, number][][][])[0]) as [number, number][][];
+          const centroid = polygonCentroid(rings);
+          lat = centroid.lat;
+          lon = centroid.lng;
+        }
+        popupRef.current?.remove();
+        wellbore3dRef.current?.remove();
+        setSelected(null);
+        buildingTemperatureRef.current = null;
+        setSimPanelOpen(false);
+
+        const startTemperatureFetch = (bLat: number, bLon: number) => {
+          fetch(`/api/building-temperature?lat=${bLat}&lon=${bLon}&year=2023`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              if (data) {
+                buildingTemperatureRef.current = data as BuildingTemperatureData;
+                console.log(
+                  `[Open-Meteo] Temperature saved: ${(data as BuildingTemperatureData).hours} hours for year ${(data as BuildingTemperatureData).year}`,
+                );
+              }
+            })
+            .catch(() => { /* temperature fetch is best-effort */ });
+        };
+
+        // Fetch Matrikkelen metadata for the building. The registered
+        // Matrikkelen coordinates are used for the temperature lookup (primary path).
+        // Temporary fallback: when the WFS is unavailable, use the polygon
+        // centroid so temperature data can still be fetched.
+        const res = await fetch(`/api/building-click?lat=${lat}&lon=${lon}`);
+        if (!res.ok) {
+          setSelectedBuilding({ bygningsnummer: "?", lat, lon, distance_m: 0 });
+          setCollapsed(false);
+          startTemperatureFetch(lat, lon); // temporary: centroid fallback
+          return;
+        }
+        const result = (await res.json()) as BuildingClickResult;
+        if (!result.hit || !result.selected) return;
+        setSelectedBuilding(result.selected);
+        setCollapsed(false);
+        startTemperatureFetch(result.selected.lat, result.selected.lon);
+        onUiEvent({
+          event: "buildingSelected",
+          bygningsnummer: result.selected.bygningsnummer,
+          bygningstype: result.selected.bygningstype ?? null,
+          lat: result.selected.lat,
+          lon: result.selected.lon,
+        });
+      });
     });
 
     return () => {
@@ -459,10 +725,32 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           setSimError(null);
           setSimSetup(setup);
           setSimParams({ ...setup.parameters });
-          // Mirrors geothermal-viz's own simulationSetup event: show the 3D
-          // wellbore for the well the resolved params belong to.
-          const lngLat = selectedRef.current?.lngLat;
-          if (lngLat) wellbore3dRef.current?.show(lngLat, setup.parameters, setup.case_type);
+          setSimPattern("sunflower");
+          // Seed N fields from the well-database value so the first run
+          // uses the actual number of boreholes in the park.
+          const _nw = Math.max(1, Math.round(Number(setup.parameters["num_wells_btes"] ?? 16)));
+          setSimBtesN(_nw);
+          // Find the factor pair of _nw closest to a square (so N₁ × N₂ = _nw exactly).
+          let _n2 = Math.floor(Math.sqrt(_nw));
+          while (_n2 > 1 && _nw % _n2 !== 0) _n2--;
+          setSimBtesN1(_nw / _n2);
+          setSimBtesN2(_n2);
+          setSimBtesNumSides(6);
+          // Show the 3D wellbore for the well the resolved params belong to.
+          // For BTES, use showField with client-computed pattern positions so
+          // subsequent real-time updates via updateField work correctly.
+          const lngLat = selectedRef.current?.lngLat ?? null;
+          if (lngLat) {
+            if (setup.case_type === "BTES") {
+              const _H = Number(setup.parameters["well_length"] ?? 200);
+              const _D = Number(setup.parameters["borehole_start_depth"] ?? 0.5);
+              const _B = Number(setup.parameters["well_spacing"] ?? 5);
+              const boreholes = computeBtesBoreholes("sunflower", _nw, _nw, 1, 6, _B, _H, _D);
+              wellbore3dRef.current?.showField(lngLat, boreholes, setup.parameters as Record<string, number>);
+            } else {
+              wellbore3dRef.current?.show(lngLat, setup.parameters, setup.case_type);
+            }
+          }
         } else {
           setSimSetup(null);
           setSimError("This well type does not support simulation.");
@@ -472,6 +760,28 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
         setSimStatus(null);
         setSimSetup(null);
         setSimError(message || "Could not resolve simulation parameters.");
+      } else if (action === "show_borehole_field") {
+        const { lat, lon, boreholes } = payload as {
+          lat: number;
+          lon: number;
+          boreholes: Array<{ x: number; y: number; H: number; D?: number; tilt?: number; orientation?: number }>;
+        };
+        if (typeof lon === "number" && typeof lat === "number" && Array.isArray(boreholes)) {
+          wellbore3dRef.current?.showField({ lng: lon, lat }, boreholes);
+        }
+      } else if (action === "energy_demand_ready") {
+        const { status, message } = payload as { status: string; message?: string };
+        if (status === "error") {
+          setEnergyStatus({ kind: "error", message: message || "Energy demand computation failed." });
+        } else {
+          setEnergyStatus(null);
+        }
+      } else if (action === "select_building") {
+        const building = payload as unknown as SelectedBuilding;
+        if (typeof building?.lon === "number" && typeof building?.lat === "number") {
+          map.flyTo({ center: [building.lon, building.lat], zoom: 17 });
+          setSelectedBuilding(building);
+        }
       }
     }
   }, [uiActions]);
@@ -497,13 +807,46 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     wellbore3dRef.current?.update({ [key]: value });
   };
 
+  // Real-time BTES field visualization: recompute borehole positions whenever
+  // the user changes the pattern, N fields, or spatial parameters (H, D, spacing).
+  const _btesSpacing = simParams["well_spacing"];
+  const _btesH = simParams["well_length"];
+  const _btesD = simParams["borehole_start_depth"];
+  useEffect(() => {
+    if (!simPanelOpen || simSetup?.case_type !== "BTES") return;
+    const spacing = _btesSpacing ?? 5;
+    const H = _btesH ?? 200;
+    const D = _btesD ?? 0.5;
+    const boreholes = computeBtesBoreholes(
+      simPattern, simBtesN, simBtesN1, simBtesN2, simBtesNumSides, spacing, H, D,
+    );
+    wellbore3dRef.current?.updateField(boreholes);
+  }, [simPattern, simBtesN, simBtesN1, simBtesN2, simBtesNumSides,
+      _btesSpacing, _btesH, _btesD, simSetup?.case_type, simPanelOpen]);
+
+  // Keep the controller's state.params in sync with simParams on every change.
+  // This covers borehole_diameter, num_segments, and all non-layout params for
+  // both AGS (where it is the sole visual-update path) and BTES.
+  useEffect(() => {
+    if (!simPanelOpen) return;
+    wellbore3dRef.current?.update(simParams);
+  }, [simPanelOpen, simParams]);
+
   const handleRunSimulation = () => {
     if (!simSetup?.case_type) return;
     setSimStatus({
       kind: "running",
       message: "Sent to the agent — watch the chat for progress and results.",
     });
-    onAction("run_simulation", { case_type: simSetup.case_type, parameters: simParams });
+    const btesLayoutArgs =
+      simSetup.case_type === "BTES"
+        ? simPattern === "rectangular"
+          ? { pattern: simPattern, n_1: simBtesN1, n_2: simBtesN2 }
+          : simPattern === "polygonal"
+          ? { pattern: simPattern, n: simBtesN, num_sides: simBtesNumSides }
+          : { pattern: simPattern, n: simBtesN }
+        : {};
+    onAction("run_simulation", { case_type: simSetup.case_type, parameters: simParams, ...btesLayoutArgs });
   };
 
   const toggleLayer = (groupId: string, checked: boolean) => {
@@ -515,18 +858,17 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     }
   };
 
-  const visibleCount = LAYER_GROUPS.reduce(
-    (sum, g) => sum + (visibility[g.id] ? byGroup[g.id] ?? 0 : 0),
-    0,
-  );
 
   return (
-    <div className={`map-panel${active ? " active" : ""}`}>
+    <div ref={panelRef} className={`map-panel${active ? " active" : ""}`}>
       <div ref={containerRef} className="map-panel-map" />
-      <div className={`sidebar${collapsed ? " collapsed" : ""}`}>
+      <div
+        className={`sidebar${collapsed ? " collapsed" : ""}`}
+        style={collapsed ? undefined : { width: sidebarWidth }}
+      >
         <div className="sidebar-header">
           <h1>Geothermal map</h1>
-          <p className="subtitle">Norwegian boreholes</p>
+          <p className="subtitle">Norwegian boreholes and buildings</p>
         </div>
         <div className="sidebar-section">
           <h2>Layers</h2>
@@ -543,57 +885,90 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           ))}
         </div>
         <div className="sidebar-section">
-          <h2>Statistics</h2>
-          <div className="stat-item">
-            <span className="stat-label">Total boreholes:</span>
-            <span className="stat-value">{total.toLocaleString()}</span>
-          </div>
-          <div className="stat-item">
-            <span className="stat-label">Visible:</span>
-            <span className="stat-value">{visibleCount.toLocaleString()}</span>
-          </div>
-        </div>
-        <div className="sidebar-section">
-          <h2>Selected Well</h2>
           {selected ? (
-            <div className="well-detail">
-              <div className="well-title">
-                <span className="popup-type" style={{ background: selected.color }}>
-                  {selected.label}
-                </span>{" "}
-                {selected.title}
+            <>
+              <h2>Selected Well</h2>
+              <div className="well-detail">
+                <div className="well-title">
+                  <span className="popup-type" style={{ background: selected.color }}>
+                    {selected.label}
+                  </span>{" "}
+                  {selected.title}
+                </div>
+                {SIMULATABLE_LAYERS.has(selected.layer) ? (
+                  <div className="sim-setup-action">
+                    <button className="btn-primary" onClick={handleSetupSimulation}>
+                      ⚡ Setup Simulation
+                    </button>
+                  </div>
+                ) : null}
+                <table>
+                  <tbody>
+                    {selected.rows.map(([label, value]) => (
+                      <tr key={label}>
+                        <td>{label}</td>
+                        <td>{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              {SIMULATABLE_LAYERS.has(selected.layer) ? (
+            </>
+          ) : selectedBuilding ? (
+            <>
+              <h2>Selected Building</h2>
+              <div className="well-detail">
+                <div className="well-title">Building {escapeHtml(selectedBuilding.bygningsnummer)}</div>
                 <div className="sim-setup-action">
-                  <button className="btn-primary" onClick={handleSetupSimulation}>
-                    ⚡ Setup Simulation
+                  <button className="btn-primary" onClick={() => setEnergyPanelOpen(true)}>
+                    ⚡ Analyze heating needs
                   </button>
                 </div>
-              ) : null}
-              <table>
-                <tbody>
-                  {selected.rows.map(([label, value]) => (
-                    <tr key={label}>
-                      <td>{label}</td>
-                      <td>{value}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                <table>
+                  <tbody>
+                    <tr><td>Bygningsnummer</td><td>{escapeHtml(selectedBuilding.bygningsnummer)}</td></tr>
+                    <tr><td>Bygningstype</td><td>{selectedBuilding.bygningstype ? escapeHtml(selectedBuilding.bygningstype) : "?"}</td></tr>
+                    <tr><td>Bygningsstatus</td><td>{selectedBuilding.bygningsstatus ? escapeHtml(selectedBuilding.bygningsstatus) : "?"}</td></tr>
+                    <tr><td>Kommunenavn</td><td>{selectedBuilding.kommunenavn ? escapeHtml(selectedBuilding.kommunenavn) : "?"}</td></tr>
+                    <tr><td>Kommunenummer</td><td>{selectedBuilding.kommunenummer ? escapeHtml(selectedBuilding.kommunenummer) : "?"}</td></tr>
+                    <tr><td>Breddegrad</td><td>{selectedBuilding.lat.toFixed(6)}</td></tr>
+                    <tr><td>Lengdegrad</td><td>{selectedBuilding.lon.toFixed(6)}</td></tr>
+                    <tr><td>Bruksareal totalt</td><td>{selectedBuilding.bruksareal_totalt != null ? `${selectedBuilding.bruksareal_totalt} m²` : "?"}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : (
-            <p className="no-selection">Click a well on the map to view details.</p>
+            <>
+              <h2>Selection</h2>
+              <p className="no-selection">Click a well or building on the map.</p>
+            </>
           )}
         </div>
       </div>
+      {!collapsed && (
+        <div
+          className="sidebar-resize-handle"
+          style={{ left: sidebarWidth - 3 }}
+          onMouseDown={handleResizeMouseDown}
+        />
+      )}
       <button
         className={`sidebar-toggle${collapsed ? " shifted" : ""}`}
+        style={collapsed ? undefined : { left: sidebarWidth + 10 }}
         title="Toggle sidebar"
         onClick={() => setCollapsed((c) => !c)}
       >
         ☰
       </button>
-      <div className={`sim-panel${simPanelOpen ? " open" : ""}`}>
+      {simPanelOpen && (
+        <div
+          className="sim-panel-resize-handle"
+          style={{ right: simPanelWidth - 3 }}
+          onMouseDown={handleSimPanelResize}
+        />
+      )}
+      <div className={`sim-panel${simPanelOpen ? " open" : ""}`} style={{ width: simPanelWidth }}>
         <div className="sim-panel-header">
           <h2>{simSetup ? `Simulation — ${simSetup.well_id}` : "Simulation Setup"}</h2>
           <button className="btn-icon" title="Close" onClick={handleCloseSimPanel}>
@@ -614,7 +989,12 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                 {groupSimParams(simSetup).map(([groupName, items]) => (
                   <div className="sim-param-group" key={groupName}>
                     <h3>{groupName}</h3>
-                    {items.map(({ key, meta }) => {
+                    {items
+                      .filter(({ key }) =>
+                        // num_wells_btes is replaced by the pattern-dependent N fields below
+                        !(simSetup.case_type === "BTES" && key === "num_wells_btes")
+                      )
+                      .map(({ key, meta }) => {
                       const source = simSetup.sources[key];
                       const sourceClass = source === "data" ? "source-data" : "source-default";
                       const sourceLabel = source === "data" ? "from well data" : "default";
@@ -641,6 +1021,136 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                         </div>
                       );
                     })}
+                    {groupName === "BTES Layout" && simSetup.case_type === "BTES" && (
+                      <>
+                        <div className="sim-param-row">
+                          <label htmlFor="sim-btes-pattern">Pattern</label>
+                          <div className="sim-param-input-wrap">
+                            <select
+                              id="sim-btes-pattern"
+                              className="sim-param-input"
+                              value={simPattern}
+                              onChange={(e) => setSimPattern(e.target.value)}
+                            >
+                              <option value="sunflower">Sunflower</option>
+                              <option value="rectangular">Rectangular</option>
+                              <option value="circular">Circular</option>
+                              <option value="polygonal">Polygonal</option>
+                            </select>
+                          </div>
+                        </div>
+                        {simPattern === "rectangular" ? (
+                          <>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-n1">Wells in x-dir (N₁)</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-n1"
+                                  className="sim-param-input"
+                                  value={simBtesN1}
+                                  min={1}
+                                  max={50}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v > 0) {
+                                      setSimBtesN1(v);
+                                      setSimParams((p) => ({ ...p, num_wells_btes: v * simBtesN2 }));
+                                    }
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-n2">Wells in y-dir (N₂)</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-n2"
+                                  className="sim-param-input"
+                                  value={simBtesN2}
+                                  min={1}
+                                  max={50}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v > 0) {
+                                      setSimBtesN2(v);
+                                      setSimParams((p) => ({ ...p, num_wells_btes: simBtesN1 * v }));
+                                    }
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </>
+                        ) : simPattern === "polygonal" ? (
+                          <>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-n">Number of wells (N)</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-n"
+                                  className="sim-param-input"
+                                  value={simBtesN}
+                                  min={3}
+                                  max={200}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v > 0) {
+                                      setSimBtesN(v);
+                                      setSimParams((p) => ({ ...p, num_wells_btes: v }));
+                                    }
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="sim-param-row">
+                              <label htmlFor="sim-btes-sides">Number of sides</label>
+                              <div className="sim-param-input-wrap">
+                                <input
+                                  type="number"
+                                  id="sim-btes-sides"
+                                  className="sim-param-input"
+                                  value={simBtesNumSides}
+                                  min={3}
+                                  max={20}
+                                  step={1}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    if (!isNaN(v) && v >= 3) setSimBtesNumSides(v);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="sim-param-row">
+                            <label htmlFor="sim-btes-n">Number of wells (N)</label>
+                            <div className="sim-param-input-wrap">
+                              <input
+                                type="number"
+                                id="sim-btes-n"
+                                className="sim-param-input"
+                                value={simBtesN}
+                                min={1}
+                                max={200}
+                                step={1}
+                                onChange={(e) => {
+                                  const v = parseInt(e.target.value, 10);
+                                  if (!isNaN(v) && v > 0) {
+                                    setSimBtesN(v);
+                                    setSimParams((p) => ({ ...p, num_wells_btes: v }));
+                                  }
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -660,6 +1170,145 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
           ) : (
             <p className="sim-case-desc">Loading simulation setup…</p>
           )}
+        </div>
+      </div>
+      {energyPanelOpen && (
+        <div
+          className="sim-panel-resize-handle"
+          style={{ right: energyPanelWidth - 3 }}
+          onMouseDown={handleEnergyPanelResize}
+        />
+      )}
+      <div className={`sim-panel${energyPanelOpen ? " open" : ""}`} style={{ width: energyPanelWidth }}>
+        <div className="sim-panel-header">
+          <h2>Heating needs — building #{selectedBuilding?.bygningsnummer ?? "?"}</h2>
+          <button className="btn-icon" title="Close" onClick={() => setEnergyPanelOpen(false)}>
+            ✕
+          </button>
+        </div>
+        <div className="sim-tab-content active">
+          <div className="sim-param-row">
+            <label htmlFor="energy-year">Year</label>
+            <div className="sim-param-input-wrap">
+              <input
+                type="number"
+                id="energy-year"
+                className="sim-param-input"
+                value={energyYear}
+                min={1950}
+                max={2030}
+                step={1}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (!isNaN(v)) setEnergyYear(v);
+                }}
+              />
+            </div>
+          </div>
+          {!selectedBuilding?.bygningstype_kode && (
+            <div className="sim-param-row">
+              <label htmlFor="energy-building-category">Building type</label>
+              <div className="sim-param-input-wrap">
+                <select
+                  id="energy-building-category"
+                  className="sim-param-input"
+                  value={energyBuildingCategory}
+                  onChange={(e) => setEnergyBuildingCategory(e.target.value)}
+                >
+                  <option value="House">House</option>
+                  <option value="Apartment">Apartment</option>
+                  <option value="Office">Office</option>
+                  <option value="Shop">Shop</option>
+                  <option value="Hotel">Hotel</option>
+                  <option value="School">School</option>
+                  <option value="University">University</option>
+                  <option value="Kindergarten">Kindergarten</option>
+                  <option value="Hospital">Hospital</option>
+                  <option value="Nursing_home">Nursing home</option>
+                  <option value="Culture_Sport">Culture / Sport</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+            </div>
+          )}
+          <div className="sim-param-row">
+            <label htmlFor="energy-floor-area">Usable floor area (m²)</label>
+            <div className="sim-param-input-wrap">
+              <input
+                type="number"
+                id="energy-floor-area"
+                className="sim-param-input"
+                value={energyFloorArea}
+                min={1}
+                placeholder="Typical value if empty"
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setEnergyFloorArea(isNaN(v) || v <= 0 ? "" : v);
+                }}
+              />
+            </div>
+          </div>
+          <div className="sim-param-row">
+            <label htmlFor="energy-efficiency">Efficiency level</label>
+            <div className="sim-param-input-wrap">
+              <select
+                id="energy-efficiency"
+                className="sim-param-input"
+                value={energyEfficiencyKey}
+                onChange={(e) => setEnergyEfficiencyKey(e.target.value)}
+              >
+                <option value="Reg">Regular</option>
+                <option value="Eff-E">Efficient existing / retrofitted</option>
+                <option value="Eff-N">Efficient new build</option>
+                <option value="Vef">Very efficient / near-passive house</option>
+              </select>
+            </div>
+          </div>
+          <div className="sim-param-row">
+            <label htmlFor="energy-demand-type">Demand type</label>
+            <div className="sim-param-input-wrap">
+              <select
+                id="energy-demand-type"
+                className="sim-param-input"
+                value={energyDemandType}
+                onChange={(e) =>
+                  setEnergyDemandType(
+                    e.target.value as "DHW" | "Space heating" | "Total thermal heating"
+                  )
+                }
+              >
+                <option value="Total thermal heating">Total thermal heating</option>
+                <option value="Space heating">Space heating</option>
+                <option value="DHW">DHW (domestic hot water)</option>
+              </select>
+            </div>
+          </div>
+          <div className="sim-actions">
+            <button
+              className="btn-primary btn-run"
+              disabled={energyStatus?.kind === "running"}
+              onClick={() => {
+                if (!selectedBuilding) return;
+                setEnergyStatus({ kind: "running", message: "Computing heating needs…" });
+                onAction("generate_energy_demands", {
+                  lat: selectedBuilding.lat,
+                  lon: selectedBuilding.lon,
+                  year: energyYear,
+                  bygningsnummer: selectedBuilding.bygningsnummer,
+                  bygningstype_kode: selectedBuilding.bygningstype_kode ?? null,
+                  building_category: selectedBuilding.bygningstype_kode ? null : energyBuildingCategory,
+                  usable_floor_area_m2: energyFloorArea !== "" ? energyFloorArea : null,
+                  efficiency_key: energyEfficiencyKey,
+                  demand_type: energyDemandType,
+                });
+              }}
+            >
+              ▶ Generate heating needs
+            </button>
+          </div>
+          {energyStatus ? (
+            <div className={`sim-status ${energyStatus.kind}`}>{energyStatus.message}</div>
+          ) : null}
         </div>
       </div>
     </div>

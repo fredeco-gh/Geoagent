@@ -18,19 +18,15 @@ JutulAgent = "79b12aa6-73c9-4fa8-9c54-e97745f42687"
 JutulAgentFimbul = "46917057-ee61-4ce0-8807-c8cab0e0431f"
 JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
 
-# Floor at the release the skills are written against, so a stale env can't drift
-# behind them (it fails to resolve and the drift check prompts a rebuild). Bump it
-# when the skills are updated for a newer Fimbul. Only Fimbul is pinned; its own
-# compat resolves the JutulDarcy/Jutul stack it builds on.
-[compat]
-Fimbul = "0.3.5"
-
 # Both deps are jutul-agent's in-env Julia runtime, declared as relative `[sources]`
 # paths so they survive the copy into a workspace. JutulAgent is the shared,
 # sim-agnostic core (figure capture, ensemble helpers, generic-Makie warm-up) — it
 # has a single source in the repo (src/jutul_agent/julia_runtime/JutulAgent) that
 # env_setup copies in at bootstrap. JutulAgentFimbul is this env's per-simulator
 # warm-up package (the solve/plot bake + @recompile_invalidations).
+# Fimbul is pinned to a fork that adds extra btes() field patterns (rectangular,
+# circular, polygonal) needed by the geoagent_app.
 [sources]
 JutulAgent = {path = "JutulAgent"}
 JutulAgentFimbul = {path = "JutulAgentFimbul"}
+Fimbul = {url = "https://github.com/fredeco-gh/Fimbul"}

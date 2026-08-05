@@ -52,7 +52,7 @@ export function Topbar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             <ViewsIcon /> Views <span className="count">{viewCount}</span>
           </button>
         ) : null}
-        {Object.values(closedViews).map((view) => (
+        {Object.values(closedViews).filter((view) => view.kind === "map").map((view) => (
           <button
             key={view.id}
             className="ghost reopen-btn"
