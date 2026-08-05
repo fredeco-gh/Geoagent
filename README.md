@@ -1,5 +1,6 @@
 # Geoagent
 
+[![CI](https://github.com/fredeco-gh/Geoagent/actions/workflows/ci.yml/badge.svg)](https://github.com/fredeco-gh/Geoagent/actions/workflows/ci.yml)
 [![Simulators](https://github.com/fredeco-gh/Geoagent/actions/workflows/simulators.yml/badge.svg)](https://github.com/fredeco-gh/Geoagent/actions/workflows/simulators.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 

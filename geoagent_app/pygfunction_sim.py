@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import dataclasses
 import functools
@@ -13,7 +13,9 @@ class BoreholeParams:
     """Geometric parameters for a single borehole."""
 
     H: float = 200.0  # active borehole depth [m]
-    D: float = 0.5  # buried depth from surface to top of active section [m]  (matches Fimbul default)
+    D: float = (
+        0.5  # buried depth from surface to top of active section [m]  (matches Fimbul default)
+    )
     r_b: float = 0.065  # borehole radius [m]
     x: float = 0.0  # horizontal position [m]
     y: float = 0.0  # horizontal position [m]
@@ -26,7 +28,9 @@ class GroundParams:
     """Ground thermal properties, uniform across the borehole field."""
 
     k_s: float = 3.7  # thermal conductivity [W/(m K)]  (matches Fimbul default)
-    alpha: float = 1.59e-6  # thermal diffusivity [m²/s]  k_s/(rho*cp) = 3.7/(2580*900)  (matches Fimbul default)
+    # thermal diffusivity [m²/s]  k_s/(rho*cp) = 3.7/(2580*900)  (matches Fimbul default)
+    alpha: float = 1.59e-6
+
 
 @dataclasses.dataclass
 class PipeParams:
@@ -34,9 +38,11 @@ class PipeParams:
 
     r_in: float = 0.015  # inner pipe radius [m]
     r_out: float = 0.018  # outer pipe radius [m]  (r_in + 3 mm wall, matches Fimbul)
-    D_s: float = 0.030  # shank spacing: borehole-centre to pipe-centre [m]  (pipe_spacing/2, matches Fimbul)
+    D_s: float = (
+        0.030  # shank spacing: borehole-centre to pipe-centre [m]  (pipe_spacing/2, matches Fimbul)
+    )
     k_p: float = 0.38  # pipe wall thermal conductivity [W/(m K)]  (matches Fimbul)
-    k_g: float = 2.3   # grout thermal conductivity [W/(m K)]  (matches Fimbul)
+    k_g: float = 2.3  # grout thermal conductivity [W/(m K)]  (matches Fimbul)
     epsilon: float = 1e-4  # pipe inner-wall roughness [m]  (matches Fimbul/JutulDarcy default)
 
 
@@ -60,7 +66,7 @@ def rectangle_field(
     orientation: float = 0.0,
     num_sectors: int | None = None,
 ) -> list[list[BoreholeParams]]:
-    """Generate a rectangular N_1 × N_2 grid of boreholes divided into Cartesian sectors.
+    """Generate a rectangular N_1 x N_2 grid of boreholes divided into Cartesian sectors.
 
     Mirrors Fimbul's ``rectangular_pattern`` (uses Cartesian sector division).
 
@@ -72,7 +78,9 @@ def rectangle_field(
         for i in range(N_1)
         for j in range(N_2)
     ]
-    return divide_into_sectors(flat, num_sectors if num_sectors is not None else N_1 * N_2, "cartesian")
+    return divide_into_sectors(
+        flat, num_sectors if num_sectors is not None else N_1 * N_2, "cartesian"
+    )
 
 
 def sunflower_field(
@@ -102,10 +110,13 @@ def sunflower_field(
     radius = 1.3513 * B / current_spacing if current_spacing > 0 else B
     flat = [
         BoreholeParams(
-            H=H, D=D, r_b=r_b,
+            H=H,
+            D=D,
+            r_b=r_b,
             x=float(np.sqrt(i / N) * radius * np.cos(i * delta_theta)),
             y=float(np.sqrt(i / N) * radius * np.sin(i * delta_theta)),
-            tilt=tilt, orientation=orientation,
+            tilt=tilt,
+            orientation=orientation,
         )
         for i in range(N)
     ]
@@ -158,7 +169,8 @@ def _factor_pair_closest_to_square(n: int) -> tuple[int, int]:
 
 
 def _equal_index_ranges(total: int, n_groups: int) -> list[tuple[int, int]]:
-    """Split *total* items into *n_groups* contiguous, as-equal-as-possible half-open [a, b) ranges."""
+    """Split *total* items into *n_groups* contiguous, as-equal-as-possible half-open [a, b) ranges.
+    """
     base = total // n_groups
     rem = total - base * n_groups
     ranges: list[tuple[int, int]] = []
@@ -196,7 +208,7 @@ def group_into_sectors_angular(
 
     xs = np.array([b.x for b in boreholes])
     ys = np.array([b.y for b in boreholes])
-    theta = np.arctan2(ys, xs) + np.pi        # [0, 2π)
+    theta = np.arctan2(ys, xs) + np.pi  # [0, 2π)
     r = np.hypot(xs, ys)
     order_theta = np.argsort(theta, kind="stable")
 
@@ -208,7 +220,7 @@ def group_into_sectors_angular(
     offset = 0
     for size in sizes:
         idx = order_theta[offset : offset + size]
-        idx = idx[np.argsort(r[idx], kind="stable")]   # closest-first within sector
+        idx = idx[np.argsort(r[idx], kind="stable")]  # closest-first within sector
         sectors.append([boreholes[i] for i in idx])
         offset += size
     return sectors
@@ -232,7 +244,7 @@ def group_into_sectors_cartesian(
     Args:
         boreholes: Flat list of boreholes.
         num_sectors: Number of sectors. Must evenly factorise into a sensible
-            row × col pair (e.g. 4 → 2×2, 6 → 2×3).
+            row x col pair (e.g. 4 -> 2x2, 6 -> 2x3).
 
     Returns:
         Nested list ``sectors[s][k]`` ready for ``simulate_borehole_temperatures``.
@@ -265,14 +277,17 @@ def group_into_sectors_cartesian(
         for r0, r1 in row_ranges:
             band_rows_set = set(rows[r0:r1])
             idx = [
-                i for i in range(n)
+                i
+                for i in range(n)
                 if float(xs[i]) in band_cols_set and float(ys[i]) in band_rows_set
             ]
             # boustrophedon: ascending y for even col_rank, descending for odd
-            idx.sort(key=lambda i: (
-                xs[i],
-                ys[i] if col_rank[float(xs[i])] % 2 == 0 else -ys[i],
-            ))
+            idx.sort(
+                key=lambda i: (
+                    xs[i],
+                    ys[i] if col_rank[float(xs[i])] % 2 == 0 else -ys[i],
+                )
+            )
             sectors.append([boreholes[i] for i in idx])
     return sectors
 
@@ -312,7 +327,9 @@ def divide_into_sectors(
     elif method == "cartesian":
         return group_into_sectors_cartesian(boreholes, num_sectors)
     else:
-        raise ValueError(f"Unknown sector division method {method!r}. Use 'angular' or 'cartesian'.")
+        raise ValueError(
+            f"Unknown sector division method {method!r}. Use 'angular' or 'cartesian'."
+        )
 
 
 def _points_in_polygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
@@ -374,7 +391,15 @@ def polygonal_field(
     xy = xy[:, order]
 
     flat = [
-        BoreholeParams(H=H, D=D, r_b=r_b, x=float(xy[0, i]), y=float(xy[1, i]), tilt=tilt, orientation=orientation)
+        BoreholeParams(
+            H=H,
+            D=D,
+            r_b=r_b,
+            x=float(xy[0, i]),
+            y=float(xy[1, i]),
+            tilt=tilt,
+            orientation=orientation,
+        )
         for i in range(xy.shape[1])
     ]
     return divide_into_sectors(flat, num_sectors if num_sectors is not None else N, "angular")
@@ -492,6 +517,7 @@ def boreholes_to_fimbul_field(
     by H along the borehole axis defined by tilt and orientation.
     """
     import math
+
     field = []
     for sector in boreholes:
         sector_wells = []
@@ -643,10 +669,9 @@ def simulate_borehole_temperatures(
     ]
     network = gt.networks.Network(boreholes_gt, pipe_objs, bore_connectivity)
 
-    # Sectors are in parallel → total network flow = N_sectors × m_flow_per_sector.
+    # Sectors are in parallel -> total network flow = N_sectors * m_flow_per_sector.
     # Boreholes within a sector are in series → same m_flow passes through each.
     m_flow_network = N_sectors * m_flow
-
 
     # -- Claesson-Javed load aggregation --
     LoadAgg = gt.load_aggregation.ClaessonJaved(dt, tmax)

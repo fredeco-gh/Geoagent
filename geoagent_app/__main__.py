@@ -1,4 +1,5 @@
 """geoagent — CLI entry point for the Geoagent geothermal planning tool."""
+
 from __future__ import annotations
 
 import subprocess

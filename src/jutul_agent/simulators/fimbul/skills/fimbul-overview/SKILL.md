@@ -1,4 +1,4 @@
-﻿---
+---
 name: fimbul-overview
 description: High-level Fimbul workflow, geothermal case factories, and result inspection
 ---

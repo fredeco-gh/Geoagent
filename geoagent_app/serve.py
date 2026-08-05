@@ -118,9 +118,9 @@ def create_geothermal_map_app() -> Any:
         # (see ActionHandler), bypassing the model — it has nothing to decide
         # for either: setup is a metadata lookup, run uses the form's own values.
         actions={
-            "run_simulation":         make_run_simulation_action(str(SIMULATION_JL)),
-            "setup_simulation":       make_setup_simulation_action(str(SIMULATION_JL)),
-            "track_selected_well":    make_track_selected_well_action(str(SIMULATION_JL)),
+            "run_simulation": make_run_simulation_action(str(SIMULATION_JL)),
+            "setup_simulation": make_setup_simulation_action(str(SIMULATION_JL)),
+            "track_selected_well": make_track_selected_well_action(str(SIMULATION_JL)),
             "generate_energy_demands": make_generate_energy_demands_action(),
         },
         # Building click API — must be passed here (not via include_router after

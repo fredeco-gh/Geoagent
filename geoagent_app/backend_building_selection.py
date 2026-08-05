@@ -421,8 +421,15 @@ def _parse_building_gml(content: bytes, bygningsnummer: str, epsg: int) -> Build
 
     col_nr = _first_column(
         gdf,
-        ["bygningsnummer", "bygningsnr", "bygningnummer", "byggnr",
-         "BYGGNR", "bygningsNummer", "bygning_nummer"],
+        [
+            "bygningsnummer",
+            "bygningsnr",
+            "bygningnummer",
+            "byggnr",
+            "BYGGNR",
+            "bygningsNummer",
+            "bygning_nummer",
+        ],
     )
     # If server-side filtering worked we have exactly one row; otherwise filter
     # client-side to find the row whose building number matches.
@@ -527,11 +534,13 @@ def fetch_building_by_number(
                 return result
 
     # Strategy 2: CQL_FILTER — fast attribute filter (not all servers support it).
-    content = _get_gml({
-        "typeNames": type_name,
-        "CQL_FILTER": f"bygningsnummer='{bygningsnummer}'",
-        "count": "100",
-    })
+    content = _get_gml(
+        {
+            "typeNames": type_name,
+            "CQL_FILTER": f"bygningsnummer='{bygningsnummer}'",
+            "count": "100",
+        }
+    )
     if content:
         result = _parse_building_gml(content, bygningsnummer, epsg)
         if result is not None:
@@ -546,18 +555,19 @@ def fetch_building_by_number(
         "</PropertyIsEqualTo>"
         "</Filter>"
     )
-    content = _get_gml({
-        "typeNames": type_name,
-        "FILTER": filter_xml,
-        "count": "100",
-    })
+    content = _get_gml(
+        {
+            "typeNames": type_name,
+            "FILTER": filter_xml,
+            "count": "100",
+        }
+    )
     if content:
         result = _parse_building_gml(content, bygningsnummer, epsg)
         if result is not None:
             return result
 
     return None
-
 
 
 @router.get("/api/building-click", response_model=BuildingClickResponse)
@@ -732,6 +742,7 @@ def get_session_demand_data(session_id: str) -> dict | None:
     """Return the most-recent energy demand data for a session, or None."""
     return _session_demand_data.get(session_id)
 
+
 # Warmup template: pre-compiles PythonCall and loads pygfunction_sim.jl into
 # the Julia kernel during session startup so the first agent call is fast.
 _PYGSIM_WARMUP_TEMPLATE = """
@@ -863,7 +874,9 @@ def make_generate_energy_demands_action():
                 lambda: get_energy_demand_timeseries(
                     df_temperature=df_temp,
                     selected_year=year,
-                    building_type_code=int(bygningstype_kode) if bygningstype_kode is not None else None,
+                    building_type_code=int(bygningstype_kode)
+                    if bygningstype_kode is not None
+                    else None,
                     usable_floor_area_m2=usable_floor_area_m2,
                     efficiency_key=efficiency_key,
                     demand_type=demand_type,
@@ -904,9 +917,7 @@ def make_generate_energy_demands_action():
                 }
             )
 
-            html = _build_energy_demand_report_html(
-                bygningsnummer, year, demand_type, records
-            )
+            html = _build_energy_demand_report_html(bygningsnummer, year, demand_type, records)
 
             safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in bygningsnummer)
             run_no = _energy_demand_run_count.get(session.session_id + safe_id, 0) + 1

@@ -13,9 +13,7 @@ from fakes import FakeJulia, make_fake_adapter
 from jutul_agent.juliakernel.result import EvalResult
 from jutul_agent.session import Session
 
-_CAPABILITY_PATH = (
-    Path(__file__).resolve().parents[1] / "geoagent_app" / "capability.py"
-)
+_CAPABILITY_PATH = Path(__file__).resolve().parents[1] / "geoagent_app" / "capability.py"
 
 
 def _load_capability():
@@ -212,7 +210,13 @@ def test_run_simulation_tool_records_report_and_returns_summary(tmp_path: Path) 
     async def _run() -> None:
         async def send_wire(msg: dict[str, Any]) -> None:
             sent.append(msg)
-        await action(session, {"case_type": "AGS", "parameters": {"well_length": 100.0}}, send_wire, lambda _: None)
+
+        await action(
+            session,
+            {"case_type": "AGS", "parameters": {"well_length": 100.0}},
+            send_wire,
+            lambda _: None,
+        )
 
     asyncio.run(_run())
     finished = next(m for m in sent if m.get("type") == "tool" and m.get("event") == "finished")
@@ -232,6 +236,7 @@ def test_run_simulation_tool_opens_a_new_tab_each_run(tmp_path: Path) -> None:
     async def _run() -> None:
         async def send_wire(_: dict[str, Any]) -> None:
             pass
+
         for _ in range(2):
             await action(session, args, send_wire, lambda _: None)
 
@@ -256,6 +261,7 @@ def test_run_simulation_tool_reports_failure_without_recording_artifact(tmp_path
     async def _run() -> None:
         async def send_wire(msg: dict[str, Any]) -> None:
             sent.append(msg)
+
         await action(session, {"case_type": "AGS", "parameters": {}}, send_wire, lambda _: None)
 
     asyncio.run(_run())

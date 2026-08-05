@@ -150,6 +150,7 @@ def _apply_overrides(boreholes, overrides):
     if not overrides:
         return boreholes
     import dataclasses
+
     boreholes = [list(sector) for sector in boreholes]
     for s_str, wells in overrides.items():
         s = int(s_str)
@@ -288,12 +289,17 @@ def _make_go_to_address_tool(session: Session):
         punkt = hit["representasjonspunkt"]
         lat = punkt["lat"]
         lon = punkt["lon"]
-        resolved = ", ".join(filter(None, [
-            hit.get("adressetekst"),
-            hit.get("postnummer"),
-            hit.get("poststed"),
-            hit.get("kommunenavn"),
-        ]))
+        resolved = ", ".join(
+            filter(
+                None,
+                [
+                    hit.get("adressetekst"),
+                    hit.get("postnummer"),
+                    hit.get("poststed"),
+                    hit.get("kommunenavn"),
+                ],
+            )
+        )
 
         _ensure_map_pinned(session)
         session.trace.append(
@@ -1016,11 +1022,11 @@ def _record_simulation_artifact(
     later run opens an additional tab instead of overwriting the previous
     run's results out from under it."""
     _session_last_sim_result[session.session_id] = {
-        "case_type":      case_type,
-        "well_data":      result.get("well_data", {}),
-        "timestamps":     result.get("timestamps", []),
+        "case_type": case_type,
+        "well_data": result.get("well_data", {}),
+        "timestamps": result.get("timestamps", []),
         "reservoir_vars": result.get("reservoir_vars", []),
-        "num_steps":      result.get("num_steps", 0),
+        "num_steps": result.get("num_steps", 0),
     }
     run_no = _simulation_run_count.get(session.session_id, 0) + 1
     _simulation_run_count[session.session_id] = run_no
@@ -1065,9 +1071,7 @@ def _make_get_selected_well_params_tool(session: Session, simulation_jl_path: st
             well_props = _session_last_well_props.get(session.session_id)
             if well_props:
                 with contextlib.suppress(Exception):
-                    setup = await _setup_simulation_params(
-                        session, simulation_jl_path, well_props
-                    )
+                    setup = await _setup_simulation_params(session, simulation_jl_path, well_props)
                     if setup and setup.get("simulatable"):
                         _session_resolved_well_params[session.session_id] = setup
         if setup is None:
@@ -1217,8 +1221,13 @@ def make_run_simulation_action(simulation_jl_path: str):
         consumer = asyncio.create_task(drain_chunks())
         try:
             result = await _execute_fimbul_simulation(
-                session, simulation_jl_path, case_type, parameters,
-                pattern=pattern, num_wells_1=num_wells_1, num_wells_2=num_wells_2,
+                session,
+                simulation_jl_path,
+                case_type,
+                parameters,
+                pattern=pattern,
+                num_wells_1=num_wells_1,
+                num_wells_2=num_wells_2,
                 on_chunk=on_chunk,
             )
         except Exception as exc:
@@ -1365,7 +1374,7 @@ def make_track_selected_well_action(simulation_jl_path: str):
 
 def _make_run_borehole_simulation_tool(session: Session):
     @tool
-    async def run_borehole_simulation(  # noqa: PLR0913
+    async def run_borehole_simulation(
         N_1: int = 1,
         N_2: int = 1,
         B: float = 5.0,
@@ -1410,7 +1419,8 @@ def _make_run_borehole_simulation_tool(session: Session):
             tilt: Borehole tilt angle from vertical [radians]. Default 0.
             orientation: Azimuthal direction of tilt [radians]. Default 0.
             k_s: Ground thermal conductivity [W/(m·K)]. Default 3.7 (matches Fimbul).
-            alpha: Ground thermal diffusivity [m²/s]. Default 1.59e-6 (matches Fimbul: 3.7/(2580×900)).
+            alpha: Ground thermal diffusivity [m²/s]. Default 1.59e-6
+                (matches Fimbul: 3.7/(2580*900)).
             r_in: Pipe inner radius [m]. Default 0.015.
             r_out: Pipe outer radius [m]. Default 0.018 (matches Fimbul).
             D_s: Shank spacing, borehole centre to pipe centre [m]. Default 0.030 (matches Fimbul).
@@ -1442,22 +1452,23 @@ def _make_run_borehole_simulation_tool(session: Session):
             {"0": {"1": {"H": 250.0}, "2": {"dx": 2.0, "dy": 3.0}}}
         """
         import pandas as pd
-
-        from backend_building_selection import get_session_demand_data
         import pygfunction as gt
+        from backend_building_selection import get_session_demand_data
         from pygfunction_sim import (
             FluidParams,
             GroundParams,
             PipeParams,
-            rectangle_field,
-            sunflower_field,
             circular_field,
             polygonal_field,
+            rectangle_field,
             simulate_borehole_temperatures,
+            sunflower_field,
         )
 
         _default_fluid = FluidParams()
-        freeze_point_C = gt.media.Fluid(_default_fluid.fluid_name, _default_fluid.concentration).fluid.t_min
+        freeze_point_C = gt.media.Fluid(
+            _default_fluid.fluid_name, _default_fluid.concentration
+        ).fluid.t_min
 
         demand = get_session_demand_data(session.session_id)
         if demand is None:
@@ -1479,7 +1490,8 @@ def _make_run_borehole_simulation_tool(session: Session):
                 boreholes = polygonal_field(N_1, B, N_2, H, D, r_b, tilt, orientation, num_sectors)
             else:
                 raise ValueError(
-                    f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
+                    f"Unknown pattern {pattern!r}. "
+                    "Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
                 )
             boreholes = _apply_overrides(boreholes, overrides)
 
@@ -1491,7 +1503,9 @@ def _make_run_borehole_simulation_tool(session: Session):
                     lon=demand.get("lon"),
                     boreholes=boreholes,
                     ground=GroundParams(k_s=k_s, alpha=alpha),
-                    pipe=PipeParams(r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p, k_g=k_g, epsilon=epsilon),
+                    pipe=PipeParams(
+                        r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p, k_g=k_g, epsilon=epsilon
+                    ),
                     COP=COP,
                     G=G,
                 ),
@@ -1523,10 +1537,13 @@ def _make_run_borehole_simulation_tool(session: Session):
                 below_zero_str = f"days {', '.join(map(str, below_zero_days))}"
             else:
                 below_zero_str = (
-                    f"days {below_zero_days[0]}–{below_zero_days[-1]} "
+                    f"days {below_zero_days[0]}-{below_zero_days[-1]} "
                     f"({len(below_zero_days)} days total)"
                 )
-            below_zero_note = f"WARNING: {len(below_zero_days)} daily-avg T_in period(s) below 0 °C: {below_zero_str}\n"
+            below_zero_note = (
+                f"WARNING: {len(below_zero_days)} daily-avg T_in period(s) below 0 °C: "
+                f"{below_zero_str}\n"
+            )
         else:
             below_zero_note = "All daily-avg T_in periods are above 0 °C.\n"
 
@@ -1540,38 +1557,38 @@ def _make_run_borehole_simulation_tool(session: Session):
             f"Borehole simulation completed: {n} hourly timesteps, "
             f"{len(boreholes)} borehole(s), depth {H} m.\n"
             f"T_in:  min {min(T_in):.1f} °C  max {max(T_in):.1f} °C  "
-            f"mean {sum(T_in)/n:.1f} °C\n"
+            f"mean {sum(T_in) / n:.1f} °C\n"
             f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
-            f"mean {sum(T_out)/n:.1f} °C\n"
-            + below_zero_note +
-            "Use plot_borehole_temperatures or plot_borehole_gfunction if the "
+            f"mean {sum(T_out) / n:.1f} °C\n"
+            + below_zero_note
+            + "Use plot_borehole_temperatures or plot_borehole_gfunction if the "
             "user wants to visualise the results."
         )
 
     return run_borehole_simulation
 
 
-def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
+def _make_sweep_borehole_parameters_tool(session: Session):
     @tool
-    async def sweep_borehole_parameters(  # noqa: PLR0913
-        N_1: list[int] = [1],
-        N_2: list[int] = [1],
-        B: list[float] = [5.0],
-        H: list[float] = [200.0],
-        D: list[float] = [0.5],
-        r_b: list[float] = [0.065],
-        tilt: list[float] = [0.0],
-        orientation: list[float] = [0.0],
-        k_s: list[float] = [3.7],
-        alpha: list[float] = [1.59e-6],
-        r_in: list[float] = [0.015],
-        r_out: list[float] = [0.018],
-        D_s: list[float] = [0.030],
-        k_p: list[float] = [0.38],
-        k_g: list[float] = [2.3],
-        epsilon: list[float] = [1e-4],
-        COP: list[float] = [3.5],
-        G: list[float] = [0.03],
+    async def sweep_borehole_parameters(
+        N_1: list[int] = [1],  # noqa: B006
+        N_2: list[int] = [1],  # noqa: B006
+        B: list[float] = [5.0],  # noqa: B006
+        H: list[float] = [200.0],  # noqa: B006
+        D: list[float] = [0.5],  # noqa: B006
+        r_b: list[float] = [0.065],  # noqa: B006
+        tilt: list[float] = [0.0],  # noqa: B006
+        orientation: list[float] = [0.0],  # noqa: B006
+        k_s: list[float] = [3.7],  # noqa: B006
+        alpha: list[float] = [1.59e-6],  # noqa: B006
+        r_in: list[float] = [0.015],  # noqa: B006
+        r_out: list[float] = [0.018],  # noqa: B006
+        D_s: list[float] = [0.030],  # noqa: B006
+        k_p: list[float] = [0.38],  # noqa: B006
+        k_g: list[float] = [2.3],  # noqa: B006
+        epsilon: list[float] = [1e-4],  # noqa: B006
+        COP: list[float] = [3.5],  # noqa: B006
+        G: list[float] = [0.03],  # noqa: B006
         pattern: str = "rectangular",
         num_sectors: int | None = None,
         overrides: dict[str, dict[str, dict[str, list]]] | None = None,
@@ -1600,14 +1617,19 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
             r_b: List of values for borehole radius [m]. Default [0.065] (matches Fimbul).
             tilt: List of values for tilt angle from vertical [radians]. Default [0.0].
             orientation: List of values for azimuthal direction of tilt [radians]. Default [0.0].
-            k_s: List of values for ground thermal conductivity [W/(m·K)]. Default [3.7] (matches Fimbul).
-            alpha: List of values for ground thermal diffusivity [m²/s]. Default [1.59e-6] (matches Fimbul).
+            k_s: List of values for ground thermal conductivity [W/(m·K)].
+                Default [3.7] (matches Fimbul).
+            alpha: List of values for ground thermal diffusivity [m²/s].
+                Default [1.59e-6] (matches Fimbul).
             r_in: List of values for pipe inner radius [m]. Default [0.015].
             r_out: List of values for pipe outer radius [m]. Default [0.018] (matches Fimbul).
             D_s: List of values for shank spacing [m]. Default [0.030] (matches Fimbul).
-            k_p: List of values for pipe wall thermal conductivity [W/(m·K)]. Default [0.38] (matches Fimbul).
-            k_g: List of values for grout thermal conductivity [W/(m·K)]. Default [2.3] (matches Fimbul).
-            epsilon: List of values for pipe roughness [m]. Default [1e-4] (matches Fimbul/JutulDarcy).
+            k_p: List of values for pipe wall thermal conductivity [W/(m·K)].
+                Default [0.38] (matches Fimbul).
+            k_g: List of values for grout thermal conductivity [W/(m·K)].
+                Default [2.3] (matches Fimbul).
+            epsilon: List of values for pipe roughness [m].
+                Default [1e-4] (matches Fimbul/JutulDarcy).
             COP: List of values for heat-pump COP. Default [3.5].
             G: List of values for geothermal gradient [K/m]. Default [0.03] (matches Fimbul).
             pattern: Borehole field pattern shared across all combinations.
@@ -1628,7 +1650,7 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
                   dx: list of displacements added to the pattern x-coordinate [m].
                   dy: list of displacements added to the pattern y-coordinate [m].
                 Each (sector, well, param) triple is an independent sweep dimension.
-                Example — sweep over two depths for well 1 in sector 0, and two displacements in the 
+                Example — sweep over two depths for well 1 in sector 0, and two displacements in the
                 x- and y-directions for well 2 in sector 0:
                 {"0": {"1": {"H": [200.0,250.0]}, "2": {"dx": [1.0,2.0], "dy": [3.0,5.0]}}}
 
@@ -1636,7 +1658,6 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
         import itertools
 
         import pandas as pd
-
         from backend_building_selection import get_session_demand_data
         from pygfunction_sim import (
             GroundParams,
@@ -1665,12 +1686,44 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
 
         param_names = [
-            "N_1", "N_2", "B", "H", "D", "r_b", "tilt", "orientation",
-            "k_s", "alpha", "r_in", "r_out", "D_s", "k_p", "k_g", "epsilon", "COP", "G",
+            "N_1",
+            "N_2",
+            "B",
+            "H",
+            "D",
+            "r_b",
+            "tilt",
+            "orientation",
+            "k_s",
+            "alpha",
+            "r_in",
+            "r_out",
+            "D_s",
+            "k_p",
+            "k_g",
+            "epsilon",
+            "COP",
+            "G",
         ]
         param_lists = [
-            N_1, N_2, B, H, D, r_b, tilt, orientation,
-            k_s, alpha, r_in, r_out, D_s, k_p, k_g, epsilon, COP, G,
+            N_1,
+            N_2,
+            B,
+            H,
+            D,
+            r_b,
+            tilt,
+            orientation,
+            k_s,
+            alpha,
+            r_in,
+            r_out,
+            D_s,
+            k_p,
+            k_g,
+            epsilon,
+            COP,
+            G,
         ]
         n_base = len(param_names)
 
@@ -1687,12 +1740,9 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
                         param_names.append(f"[{s_str},{w_str}].{param_key}")
                         param_lists.append([float(v) for v in vals])
 
-        varied = [name for name, vals in zip(param_names, param_lists) if len(vals) > 1]
-        fixed = {
-            name: vals[0]
-            for name, vals in zip(param_names, param_lists)
-            if len(vals) == 1
-        }
+        zipped = list(zip(param_names, param_lists, strict=True))
+        varied = [name for name, vals in zipped if len(vals) > 1]
+        fixed = {name: vals[0] for name, vals in zipped if len(vals) == 1}
         combos = list(itertools.product(*param_lists))
         n_combos = len(combos)
 
@@ -1700,44 +1750,77 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
         for combo in combos:
             base_combo = combo[:n_base]
             ov_vals = combo[n_base:]
-            (c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation,
-             c_k_s, c_alpha, c_r_in, c_r_out, c_D_s, c_k_p, c_k_g, c_epsilon,
-             c_COP, c_G) = base_combo
-            row: dict = dict(zip(param_names, combo))
+            (
+                c_N_1,
+                c_N_2,
+                c_B,
+                c_H,
+                c_D,
+                c_r_b,
+                c_tilt,
+                c_orientation,
+                c_k_s,
+                c_alpha,
+                c_r_in,
+                c_r_out,
+                c_D_s,
+                c_k_p,
+                c_k_g,
+                c_epsilon,
+                c_COP,
+                c_G,
+            ) = base_combo
+            row: dict = dict(zip(param_names, combo, strict=True))
 
             # Reconstruct a scalar overrides dict for this combo.
             combo_overrides: dict[str, dict[str, dict]] = {}
-            for (s_str, w_str, param_key), val in zip(override_dims, ov_vals):
+            for (s_str, w_str, param_key), val in zip(override_dims, ov_vals, strict=True):
                 combo_overrides.setdefault(s_str, {}).setdefault(w_str, {})[param_key] = val
 
             try:
                 if pattern == "rectangular":
-                    boreholes = rectangle_field(c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
+                    boreholes = rectangle_field(
+                        c_N_1, c_N_2, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors
+                    )
                 elif pattern == "sunflower":
-                    boreholes = sunflower_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
+                    boreholes = sunflower_field(
+                        c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors
+                    )
                 elif pattern == "circular":
-                    boreholes = circular_field(c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
+                    boreholes = circular_field(
+                        c_N_1, c_B, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors
+                    )
                 elif pattern == "polygonal":
-                    boreholes = polygonal_field(c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors)
+                    boreholes = polygonal_field(
+                        c_N_1, c_B, c_N_2, c_H, c_D, c_r_b, c_tilt, c_orientation, num_sectors
+                    )
                 else:
                     raise ValueError(
-                        f"Unknown pattern {pattern!r}. Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
+                        f"Unknown pattern {pattern!r}. "
+                        "Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
                     )
                 boreholes = _apply_overrides(boreholes, combo_overrides or None)
                 df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: simulate_borehole_temperatures(
-                        df,
-                        lat=demand.get("lat"),
-                        lon=demand.get("lon"),
-                        boreholes=boreholes,
-                        ground=GroundParams(k_s=c_k_s, alpha=c_alpha),
-                        pipe=PipeParams(
-                            r_in=c_r_in, r_out=c_r_out, D_s=c_D_s,
-                            k_p=c_k_p, k_g=c_k_g, epsilon=c_epsilon,
-                        ),
-                        COP=c_COP,
-                        G=c_G,
+                    lambda _bh=boreholes, _ks=c_k_s, _al=c_alpha, _ri=c_r_in, _ro=c_r_out,
+                    _ds=c_D_s, _kp=c_k_p, _kg=c_k_g, _ep=c_epsilon, _cop=c_COP, _g=c_G: (
+                        simulate_borehole_temperatures(
+                            df,
+                            lat=demand.get("lat"),
+                            lon=demand.get("lon"),
+                            boreholes=_bh,
+                            ground=GroundParams(k_s=_ks, alpha=_al),
+                            pipe=PipeParams(
+                                r_in=_ri,
+                                r_out=_ro,
+                                D_s=_ds,
+                                k_p=_kp,
+                                k_g=_kg,
+                                epsilon=_ep,
+                            ),
+                            COP=_cop,
+                            G=_g,
+                        )
                     ),
                 )
                 T_in = df_result["T_in"].tolist()
@@ -1758,13 +1841,10 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
             rows.append(row)
 
         # Build output text
-        lines: list[str] = [
-            f"Parameter sweep: {n_combos} combination(s), pattern={pattern!r}."
-        ]
+        lines: list[str] = [f"Parameter sweep: {n_combos} combination(s), pattern={pattern!r}."]
         if fixed:
             fixed_str = "  ".join(
-                f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
-                for k, v in fixed.items()
+                f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}" for k, v in fixed.items()
             )
             lines.append(f"Fixed: {fixed_str}")
         if varied:
@@ -1783,6 +1863,8 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
         lines.append(header)
         lines.append("-" * len(header))
 
+        in_keys = ("T_in_min", "T_in_mean", "T_in_max")
+        out_keys = ("T_out_min", "T_out_mean", "T_out_max")
         n_errors = 0
         for i, row in enumerate(rows):
             if row.get("error"):
@@ -1791,18 +1873,16 @@ def _make_sweep_borehole_parameters_tool(session: Session):  # noqa: PLR0912
                     f"{row[name]:>{w}.4g}" if isinstance(row[name], float) else f"{row[name]:>{w}}"
                     for name in varied
                 )
-                lines.append(f"  {i+1:>3}  {varied_vals}  ERROR: {row['error']}")
+                lines.append(f"  {i + 1:>3}  {varied_vals}  ERROR: {row['error']}")
                 continue
             varied_vals = "".join(
                 f"  {row[name]:>{w}.4g}" if isinstance(row[name], float) else f"  {row[name]:>{w}}"
                 for name in varied
             )
+            t_in = "  " + "  ".join(f"{row[k]:>{w}.2f}" for k in in_keys)
+            t_out = "  " + "  ".join(f"{row[k]:>{w}.2f}" for k in out_keys)
             lines.append(
-                f"  {i+1:>3}"
-                + varied_vals
-                + f"  {row['n_boreholes']:>5}"
-                + f"  {row['T_in_min']:>{w}.2f}  {row['T_in_mean']:>{w}.2f}  {row['T_in_max']:>{w}.2f}"
-                + f"  {row['T_out_min']:>{w}.2f}  {row['T_out_mean']:>{w}.2f}  {row['T_out_max']:>{w}.2f}"
+                f"  {i + 1:>3}" + varied_vals + f"  {row['n_boreholes']:>5}" + t_in + t_out
             )
 
         if n_errors:
@@ -1820,32 +1900,40 @@ def _build_temperatures_html(timestamps: list[str], T_in: list[float], T_out: li
     import json
 
     stride = max(1, len(timestamps) // 365)
-    data = json.dumps({
-        "labels": timestamps[::stride],
-        "T_in": T_in[::stride],
-        "T_out": T_out[::stride],
-    })
+    data = json.dumps(
+        {
+            "labels": timestamps[::stride],
+            "T_in": T_in[::stride],
+            "T_out": T_out[::stride],
+        }
+    )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Borehole fluid temperatures</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>body{{font-family:sans-serif;margin:24px;background:#f5f5f5}}
-.chart-wrap{{background:#fff;border-radius:8px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:24px}}</style>
+.chart-wrap{{background:#fff;border-radius:8px;padding:20px;
+box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:24px}}</style>
 </head><body>
 <h1 style="font-size:1.1rem;color:#333;margin-bottom:16px">Borehole fluid temperatures</h1>
 <div class="chart-wrap"><canvas id="c"></canvas></div>
 <script>
 const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function fmtDate(s){{const d=new Date(s);return isNaN(d)?s:String(d.getDate()).padStart(2,'0')+' '+MONTHS[d.getMonth()];}}
+function fmtDate(s){{const d=new Date(s);
+  return isNaN(d)?s:String(d.getDate()).padStart(2,'0')+' '+MONTHS[d.getMonth()];}}
 const d={data};
 new Chart(document.getElementById('c'),{{
   type:'line',
   data:{{labels:d.labels,datasets:[
-    {{label:'Tᵢₙ (°C)',data:d.T_in,borderColor:'#2980b9',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
-    {{label:'Tₒᵤₜ (°C)',data:d.T_out,borderColor:'#27ae60',borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
+    {{label:'Tᵢₙ (°C)',data:d.T_in,borderColor:'#2980b9',
+     borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
+    {{label:'Tₒᵤₜ (°C)',data:d.T_out,borderColor:'#27ae60',
+     borderWidth:1.5,pointRadius:0,tension:0.1,fill:false}},
   ]}},
   options:{{responsive:true,animation:false,plugins:{{legend:{{position:'top'}}}},
     scales:{{
-      x:{{title:{{display:true,text:'Date'}},ticks:{{maxTicksLimit:12,maxRotation:0,callback(v){{return fmtDate(this.getLabelForValue(v));}}}}  }},
+      x:{{title:{{display:true,text:'Date'}},
+        ticks:{{maxTicksLimit:12,maxRotation:0,
+          callback(v){{return fmtDate(this.getLabelForValue(v));}}}}  }},
       y:{{title:{{display:true,text:'Temperature (°C)'}}}}
     }}}}
 }});
@@ -1853,12 +1941,15 @@ new Chart(document.getElementById('c'),{{
 
 
 def _build_gfunction_html(time_s: list[float], gfunc: list[float]) -> str:
-    import json, math
+    import json
+    import math
 
-    data = json.dumps({
-        "labels": [f"{math.log(t):.2f}" for t in time_s],
-        "g": [round(v, 4) for v in gfunc],
-    })
+    data = json.dumps(
+        {
+            "labels": [f"{math.log(t):.2f}" for t in time_s],
+            "g": [round(v, 4) for v in gfunc],
+        }
+    )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>g-function</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
@@ -1884,7 +1975,8 @@ def _make_plot_borehole_temperatures_tool(session: Session):
     async def plot_borehole_temperatures() -> str:
         """Plot T_in and T_out vs time from the most recent borehole simulation.
 
-        Opens a chart in a dedicated canvas tab that the user can see. Call run_borehole_simulation first.
+        Opens a chart in a dedicated canvas tab that the user can see.
+        Call run_borehole_simulation first.
         """
         result = _session_borehole_results.get(session.session_id)
         if result is None:
@@ -1917,7 +2009,8 @@ def _make_plot_borehole_gfunction_tool(session: Session):
     async def plot_borehole_gfunction() -> str:
         """Plot the g-function vs ln(t) for the borehole field from the most recent simulation.
 
-        Opens a chart in a dedicated canvas tab that the user can see. Call run_borehole_simulation first.
+        Opens a chart in a dedicated canvas tab that the user can see.
+        Call run_borehole_simulation first.
         """
         result = _session_borehole_results.get(session.session_id)
         if result is None:
@@ -1945,15 +2038,14 @@ def _make_plot_borehole_gfunction_tool(session: Session):
     return plot_borehole_gfunction
 
 
-def _borehole_temperatures_png(
-    timestamps: list[str], T_in: list[float], T_out: list[float]
-) -> str:
+def _borehole_temperatures_png(timestamps: list[str], T_in: list[float], T_out: list[float]) -> str:
     """Render T_in / T_out vs time as a PNG and return it base64-encoded."""
     import base64
     import io
     from datetime import datetime
 
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
@@ -1984,6 +2076,7 @@ def _borehole_gfunction_png(gfunc_time_s: list[float], gfunc_vals: list[float]) 
     import math
 
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -2008,7 +2101,7 @@ def _make_view_borehole_temperatures_tool(session: Session):
 
         Returns an image you can actually see, plus key statistics including
         monthly averages and freezing-risk hours. Call run_borehole_simulation first.
-        Use plot_borehole_temperatures to show the plot to the user. 
+        Use plot_borehole_temperatures to show the plot to the user.
         """
         from datetime import datetime
 
@@ -2024,11 +2117,23 @@ def _make_view_borehole_temperatures_tool(session: Session):
 
         hours_below_freeze = sum(1 for t in T_in if t < freeze_point_C)
 
-        month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
-                       7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
-        monthly_in: dict[tuple[int,int], list[float]] = {}
-        monthly_out: dict[tuple[int,int], list[float]] = {}
-        for ts_str, ti, to in zip(timestamps, T_in, T_out):
+        month_names = {
+            1: "Jan",
+            2: "Feb",
+            3: "Mar",
+            4: "Apr",
+            5: "May",
+            6: "Jun",
+            7: "Jul",
+            8: "Aug",
+            9: "Sep",
+            10: "Oct",
+            11: "Nov",
+            12: "Dec",
+        }
+        monthly_in: dict[tuple[int, int], list[float]] = {}
+        monthly_out: dict[tuple[int, int], list[float]] = {}
+        for ts_str, ti, to in zip(timestamps, T_in, T_out, strict=True):
             try:
                 dt = datetime.fromisoformat(ts_str)
                 key = (dt.year, dt.month)
@@ -2036,17 +2141,19 @@ def _make_view_borehole_temperatures_tool(session: Session):
                 continue
             monthly_in.setdefault(key, []).append(ti)
             monthly_out.setdefault(key, []).append(to)
-        monthly_lines = [
-            f"  {month_names[m]:3s} {y}: {sum(monthly_in[(y,m)])/len(monthly_in[(y,m)]):+.1f} / "
-            f"{sum(monthly_out[(y,m)])/len(monthly_out[(y,m)]):+.1f} °C"
-            for y, m in sorted(monthly_in)
-        ]
+        monthly_lines = []
+        for y, m in sorted(monthly_in):
+            t_in_m = sum(monthly_in[(y, m)]) / len(monthly_in[(y, m)])
+            t_out_m = sum(monthly_out[(y, m)]) / len(monthly_out[(y, m)])
+            monthly_lines.append(f"  {month_names[m]:3s} {y}: {t_in_m:+.1f} / {t_out_m:+.1f} °C")
 
         stats = (
             f"Run #{result['run_no']}, {n} hourly timesteps\n"
-            f"T_in:  min {min(T_in):.2f} °C  max {max(T_in):.2f} °C  mean {sum(T_in)/n:.2f} °C\n"
-            f"T_out: min {min(T_out):.2f} °C  max {max(T_out):.2f} °C  mean {sum(T_out)/n:.2f} °C\n"
-            f"Hours T_in < {freeze_point_C:.1f} °C (freeze point): {hours_below_freeze} ({100*hours_below_freeze/n:.1f}%)\n"
+            f"T_in:  min {min(T_in):.2f} °C  max {max(T_in):.2f} °C  mean {sum(T_in) / n:.2f} °C\n"
+            f"T_out: min {min(T_out):.2f} °C  max {max(T_out):.2f} °C"
+            f"  mean {sum(T_out) / n:.2f} °C\n"
+            f"Hours T_in < {freeze_point_C:.1f} °C (freeze point): "
+            f"{hours_below_freeze} ({100 * hours_below_freeze / n:.1f}%)\n"
             "Monthly mean T_in / T_out:\n" + "\n".join(monthly_lines)
         )
 
@@ -2069,7 +2176,7 @@ def _make_view_borehole_gfunction_tool(session: Session):
         """View a g-function vs ln(t) plot from the most recent borehole simulation.
 
         Returns an image you can actually see, plus key g values. Call
-        run_borehole_simulation first. Use plot_borehole_gfunction to show the plot to the user. 
+        run_borehole_simulation first. Use plot_borehole_gfunction to show the plot to the user.
         """
         result = _session_borehole_results.get(session.session_id)
         if result is None:
@@ -2081,11 +2188,13 @@ def _make_view_borehole_gfunction_tool(session: Session):
         gfunc_vals: list[float] = result["gfunc_vals"]
         lnt = [math.log(t) for t in gfunc_time_s]
 
-        stats = "\n".join([
-            f"Run #{result['run_no']}, {len(lnt)} data points",
-            f"ln(t) range: {lnt[0]:.2f} to {lnt[-1]:.2f}",
-            f"g range:     {min(gfunc_vals):.3f} to {max(gfunc_vals):.3f}",
-        ])
+        stats = "\n".join(
+            [
+                f"Run #{result['run_no']}, {len(lnt)} data points",
+                f"ln(t) range: {lnt[0]:.2f} to {lnt[-1]:.2f}",
+                f"g range:     {min(gfunc_vals):.3f} to {max(gfunc_vals):.3f}",
+            ]
+        )
 
         try:
             b64 = _borehole_gfunction_png(gfunc_time_s, gfunc_vals)
@@ -2115,6 +2224,7 @@ def _fimbul_validation_png(
     from datetime import datetime, timedelta
 
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
@@ -2130,7 +2240,7 @@ def _fimbul_validation_png(
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
 
-    ax1.plot(xs, T_in_C,  color="#d62728", linewidth=0.8, label="Tᵢₙ (prescribed)")
+    ax1.plot(xs, T_in_C, color="#d62728", linewidth=0.8, label="Tᵢₙ (prescribed)")
     ax1.plot(xs, T_out_C, color="#1f77b4", linewidth=0.8, label="Tₒᵤₜ (Fimbul)")
     ax1.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
     ax1.set_ylabel("Temperature [°C]")
@@ -2138,8 +2248,9 @@ def _fimbul_validation_png(
     ax1.legend()
 
     ax2.plot(xs, demand_kWh_windowed, color="#e67e22", linewidth=0.8, label="Heating needs")
-    ax2.plot(xs, building_kWh,        color="#27ae60", linewidth=0.8,
-             label="Fimbul implied building heating")
+    ax2.plot(
+        xs, building_kWh, color="#27ae60", linewidth=0.8, label="Fimbul implied building heating"
+    )
     ax2.axhline(0, color="black", linewidth=0.5, linestyle="--", alpha=0.5)
     ax2.set_xlabel("Time" if use_dates else "Day of year")
     ax2.set_ylabel("Heating [kWh]")
@@ -2160,7 +2271,7 @@ def _fimbul_validation_png(
 
 def _make_show_borehole_field_tool(session: Session):
     @tool
-    async def show_borehole_field(  # noqa: PLR0913
+    async def show_borehole_field(
         N_1: int = 1,
         N_2: int = 1,
         B: float = 5.0,
@@ -2207,10 +2318,10 @@ def _make_show_borehole_field_tool(session: Session):
         """
         from backend_building_selection import get_session_demand_data
         from pygfunction_sim import (
-            rectangle_field,
-            sunflower_field,
             circular_field,
             polygonal_field,
+            rectangle_field,
+            sunflower_field,
         )
 
         demand = get_session_demand_data(session.session_id)
@@ -2273,7 +2384,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
     from jutul_agent.agent.tools import _capture_delta_writer
 
     @tool
-    async def run_fimbul_validation(  # noqa: PLR0913
+    async def run_fimbul_validation(
         N_1: int = 1,
         N_2: int = 1,
         B: float = 5.0,
@@ -2319,7 +2430,8 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             tilt: Tilt angle from vertical [radians]. Default 0.
             orientation: Azimuthal direction of tilt [radians]. Default 0.
             k_s: Ground thermal conductivity [W/(m·K)]. Default 3.7 (matches Fimbul).
-            alpha: Ground thermal diffusivity [m²/s]. Default 1.59e-6 (matches Fimbul: 3.7/(2580×900)).
+            alpha: Ground thermal diffusivity [m²/s]. Default 1.59e-6
+                (matches Fimbul: 3.7/(2580*900)).
             r_in: Pipe inner radius [m]. Default 0.015.
             r_out: Pipe outer radius [m]. Default 0.018 (matches Fimbul).
             D_s: Shank spacing [m]. Default 0.030 (matches Fimbul).
@@ -2355,7 +2467,6 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
 
         import pandas as pd
         import pygfunction as gt
-
         from backend_building_selection import get_session_demand_data
         from pygfunction_sim import (
             FluidParams,
@@ -2396,8 +2507,9 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
                     lon=demand.get("lon"),
                     boreholes=boreholes,
                     ground=GroundParams(k_s=k_s, alpha=alpha),
-                    pipe=PipeParams(r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p,
-                                    k_g=k_g, epsilon=epsilon),
+                    pipe=PipeParams(
+                        r_in=r_in, r_out=r_out, D_s=D_s, k_p=k_p, k_g=k_g, epsilon=epsilon
+                    ),
                     COP=COP,
                     G=G,
                 ),
@@ -2420,7 +2532,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
                 days_str = ", ".join(map(str, below_freeze_days))
             else:
                 days_str = (
-                    f"{below_freeze_days[0]}–{below_freeze_days[-1]} "
+                    f"{below_freeze_days[0]}-{below_freeze_days[-1]} "
                     f"({len(below_freeze_days)} days total)"
                 )
             return (
@@ -2435,21 +2547,18 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
 
         setup = {
             "field": boreholes_to_fimbul_field(boreholes),
-            "k_s":                 k_s,
-            "alpha":               alpha,
-            "G":                   G,
-            "T_surface_C":         T_surface,
+            "k_s": k_s,
+            "alpha": alpha,
+            "G": G,
+            "T_surface_C": T_surface,
             "m_flow_per_borehole": fluid.m_flow_per_borehole,
-            "rho_fluid":           fl.rho,
-            "cp_fluid":            fl.cp,
-            "T_in_C":              T_in_avg,
-            "durations_s":         durations_s,
+            "rho_fluid": fl.rho,
+            "cp_fluid": fl.cp,
+            "T_in_C": T_in_avg,
+            "durations_s": durations_s,
         }
 
-        result_path = (
-            session.output_dir / "artifacts" /
-            f"val-result-{uuid.uuid4().hex[:8]}.json"
-        )
+        result_path = session.output_dir / "artifacts" / f"val-result-{uuid.uuid4().hex[:8]}.json"
         result_path.parent.mkdir(parents=True, exist_ok=True)
         code = _render_template(
             _BTES_VALIDATION_TEMPLATE,
@@ -2470,14 +2579,14 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         building_kWh = [e * COP / (COP - 1.0) for e in ground_kWh]
 
         _session_fimbul_validation_results[session.session_id] = {
-            "window_hours":   window_hours,
-            "T_in_C":         val["T_in_C"],
-            "T_out_C":        val["T_out_C"],
-            "energy_kWh":     ground_kWh,
-            "building_kWh":   building_kWh,
-            "durations_s":    val["durations_s"],
-            "n_periods":      val["n_periods"],
-            "COP":            COP,
+            "window_hours": window_hours,
+            "T_in_C": val["T_in_C"],
+            "T_out_C": val["T_out_C"],
+            "energy_kWh": ground_kWh,
+            "building_kWh": building_kWh,
+            "durations_s": val["durations_s"],
+            "n_periods": val["n_periods"],
+            "COP": COP,
         }
 
         T_out = val["T_out_C"]
@@ -2486,9 +2595,9 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
         return (
             f"Fimbul validation: {n} windows of {window_hours} h.\n"
             f"T_out: min {min(T_out):.1f} °C  max {max(T_out):.1f} °C  "
-            f"mean {sum(T_out)/n:.1f} °C\n"
+            f"mean {sum(T_out) / n:.1f} °C\n"
             f"Total implied building heat: {total_building:.0f} kWh "
-            f"(ground extraction × COP/(COP−1), COP={COP})\n"
+            f"(ground extraction * COP/(COP-1), COP={COP})\n"
             "Use view_fimbul_validation to plot."
         )
 
@@ -2498,7 +2607,8 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
 def _make_view_fimbul_validation_tool(session: Session):
     @tool
     async def view_fimbul_validation() -> str | list[dict[str, Any]]:
-        """Open a canvas plot and show the image and statistics from the most recent Fimbul validation.
+        """Open a canvas plot and show the image and statistics from the most recent
+        Fimbul validation.
 
         Opens a canvas tab with (1) prescribed T_in vs Fimbul-computed T_out and
         (2) Fimbul heat extraction vs windowed heating demand. Also returns the
@@ -2512,14 +2622,14 @@ def _make_view_fimbul_validation_tool(session: Session):
         if result is None:
             return "No Fimbul validation result found. Run run_fimbul_validation first."
 
-        T_in_C       = result["T_in_C"]
-        T_out_C      = result["T_out_C"]
-        energy_kWh   = result["energy_kWh"]
+        T_in_C = result["T_in_C"]
+        T_out_C = result["T_out_C"]
+        energy_kWh = result["energy_kWh"]
         building_kWh = result["building_kWh"]
-        durations_s  = result["durations_s"]
-        n            = result["n_periods"]
-        wh           = result["window_hours"]
-        COP          = result["COP"]
+        durations_s = result["durations_s"]
+        n = result["n_periods"]
+        wh = result["window_hours"]
+        COP = result["COP"]
 
         # Aggregate raw demand (kW, hourly) over the same windows used by Fimbul.
         demand = get_session_demand_data(session.session_id)
@@ -2535,7 +2645,9 @@ def _make_view_fimbul_validation_tool(session: Session):
         else:
             demand_kWh_windowed = [0.0] * n
 
-        start_ts = demand["timestamps"][0] if demand is not None and demand.get("timestamps") else None
+        start_ts = (
+            demand["timestamps"][0] if demand is not None and demand.get("timestamps") else None
+        )
         try:
             b64 = _fimbul_validation_png(
                 T_in_C, T_out_C, durations_s, building_kWh, demand_kWh_windowed, COP, start_ts
@@ -2569,19 +2681,20 @@ def _make_view_fimbul_validation_tool(session: Session):
         )
 
         import math
-        diffs = [b - d for b, d in zip(building_kWh, demand_kWh_windowed)]
+
+        diffs = [b - d for b, d in zip(building_kWh, demand_kWh_windowed, strict=True)]
         mean_diff = sum(diffs) / n
-        rmse = math.sqrt(sum(d ** 2 for d in diffs) / n)
+        rmse = math.sqrt(sum(d**2 for d in diffs) / n)
 
         stats = (
             f"{n} time windows of {wh} h  (COP={COP})\n"
             f"T_in:  min {min(T_in_C):.2f} °C  max {max(T_in_C):.2f} °C  "
-            f"mean {sum(T_in_C)/n:.2f} °C\n"
+            f"mean {sum(T_in_C) / n:.2f} °C\n"
             f"T_out: min {min(T_out_C):.2f} °C  max {max(T_out_C):.2f} °C  "
-            f"mean {sum(T_out_C)/n:.2f} °C\n"
+            f"mean {sum(T_out_C) / n:.2f} °C\n"
             f"Total implied building heat: {sum(building_kWh):.0f} kWh\n"
             f"Total heating demand:        {sum(demand_kWh_windowed):.0f} kWh\n"
-            f"Mean difference (Fimbul − needs): {mean_diff:+.2f} kWh/window\n"
+            f"Mean difference (Fimbul - needs): {mean_diff:+.2f} kWh/window\n"
             f"RMSE (Fimbul vs needs):           {rmse:.2f} kWh/window\n"
             f"Time windows with negative extraction: {sum(1 for e in energy_kWh if e < 0)}"
         )
@@ -2685,8 +2798,9 @@ _PROMPT_FRAGMENT = (
     "exchanger simulation on the heating demands most recently generated via the "
     "'Generate energy demands' button. Use this for a single configuration. "
     "After a successful simulation, use `plot_borehole_temperatures` or "
-    "`plot_borehole_gfunction` to show/visualize a T_in/T_out vs time plot or a g-function vs time plot, " \
-    "respectively. The charts are displayed in the canvas tab. Use `view_borehole_temperatures` to view the "
+    "`plot_borehole_gfunction` to show/visualize a T_in/T_out vs time plot "
+    "or a g-function vs time plot, respectively. The charts are displayed in the canvas tab. "
+    "Use `view_borehole_temperatures` to view the "
     "T_in/T_out vs time plot yourself (returns an image you can read and describe, "
     "plus monthly averages and freezing-risk statistics). Simlarly, `view_borehole_gfunction` "
     "allows you to view and read the g-function vs ln(t) plot. \n\n"
@@ -2710,7 +2824,6 @@ _PROMPT_FRAGMENT = (
     "opens a two-panel canvas plot (T_in/T_out temperatures and Fimbul "
     "extraction vs heating demand) and returns both the plot image and summary "
     "statistics as text, so you can see and reason about the results directly."
-
 )
 
 
