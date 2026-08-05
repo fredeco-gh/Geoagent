@@ -1655,6 +1655,7 @@ def _make_sweep_borehole_parameters_tool(session: Session):
                 {"0": {"1": {"H": [200.0,250.0]}, "2": {"dx": [1.0,2.0], "dy": [3.0,5.0]}}}
 
         """
+        import functools
         import itertools
 
         import pandas as pd
@@ -1800,29 +1801,25 @@ def _make_sweep_borehole_parameters_tool(session: Session):
                         "Valid options: 'rectangular', 'sunflower', 'circular', 'polygonal'."
                     )
                 boreholes = _apply_overrides(boreholes, combo_overrides or None)
-                df_result, _, _ = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda _bh=boreholes, _ks=c_k_s, _al=c_alpha, _ri=c_r_in, _ro=c_r_out,
-                    _ds=c_D_s, _kp=c_k_p, _kg=c_k_g, _ep=c_epsilon, _cop=c_COP, _g=c_G: (
-                        simulate_borehole_temperatures(
-                            df,
-                            lat=demand.get("lat"),
-                            lon=demand.get("lon"),
-                            boreholes=_bh,
-                            ground=GroundParams(k_s=_ks, alpha=_al),
-                            pipe=PipeParams(
-                                r_in=_ri,
-                                r_out=_ro,
-                                D_s=_ds,
-                                k_p=_kp,
-                                k_g=_kg,
-                                epsilon=_ep,
-                            ),
-                            COP=_cop,
-                            G=_g,
-                        )
+                _call = functools.partial(
+                    simulate_borehole_temperatures,
+                    df,
+                    lat=demand.get("lat"),
+                    lon=demand.get("lon"),
+                    boreholes=boreholes,
+                    ground=GroundParams(k_s=c_k_s, alpha=c_alpha),
+                    pipe=PipeParams(
+                        r_in=c_r_in,
+                        r_out=c_r_out,
+                        D_s=c_D_s,
+                        k_p=c_k_p,
+                        k_g=c_k_g,
+                        epsilon=c_epsilon,
                     ),
+                    COP=c_COP,
+                    G=c_G,
                 )
+                df_result, _, _ = await asyncio.get_event_loop().run_in_executor(None, _call)
                 T_in = df_result["T_in"].tolist()
                 T_out = df_result["T_out"].tolist()
                 n = len(T_in)

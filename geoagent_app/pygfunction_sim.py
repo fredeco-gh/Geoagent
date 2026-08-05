@@ -169,8 +169,7 @@ def _factor_pair_closest_to_square(n: int) -> tuple[int, int]:
 
 
 def _equal_index_ranges(total: int, n_groups: int) -> list[tuple[int, int]]:
-    """Split *total* items into *n_groups* contiguous, as-equal-as-possible half-open [a, b) ranges.
-    """
+    """Split *total* into *n_groups* contiguous, as-equal-as-possible half-open [a, b) ranges."""
     base = total // n_groups
     rem = total - base * n_groups
     ranges: list[tuple[int, int]] = []
