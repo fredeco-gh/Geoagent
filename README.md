@@ -9,11 +9,11 @@ An AI-powered geothermal planning tool for Norwegian borehole fields and buildin
 Geoagent is developed on top of [jutul-agent](https://github.com/SINTEF-agentlab/jutul-agent), the open-source scientific AI agent framework by [SINTEF](https://www.sintef.no/en/). The interactive map is based on GeothermalViz, also developed by SINTEF.
 
 <p align="center">
-  <img src="docs/images/web-fimbul.png" alt="Geoagent: Fimbul well simulation with 3D temperature field" width="47%">
+  <img src="docs/images/Well_selection.png" alt="Geoagent: Well selection and simulation" width="47%">
   &nbsp;&nbsp;&nbsp;
-  <img src="docs/images/web-btes.png" alt="Geoagent: BTES well park simulation results" width="47%">
+  <img src="docs/images/Fimbul_validation.png" alt="Geoagent: " width="47%">
 </p>
-<p align="center"><sub>Left: an AGS doublet simulation with a 3D temperature field rendered in the canvas. Right: a BTES well park with well output time series.</sub></p>
+<p align="center"><sub>Left: A well has been clicked on the map, and a simulation has been run. Right: The results of a Fimbul validation.</sub></p>
 
 ---
 
@@ -185,7 +185,7 @@ The map panel (`canvas/MapPanel.tsx`) is registered as a native canvas panel in 
 | [Matrikkelen / Kartverket](https://www.kartverket.no/) | Building lookups; address geocoding |
 | [PROFet API](https://www.sintef.no/en/projects/2019/profet/) | Hourly building heating demand profiles |
 | [ERA5-Land](https://cds.climate.copernicus.eu/) | Climate normals (1991–2020) for undisturbed ground temperature |
-| [Fimbul.jl](https://github.com/sintefmath/Fimbul.jl) | PDE reservoir simulation (AGS, BTES) |
+| [Fimbul.jl](https://github.com/fredeco-gh/Fimbul) | PDE reservoir simulation (AGS, BTES) |
 | [pygfunction](https://github.com/MassimoCimmino/pygfunction) | Borehole g-function and U-tube heat exchanger simulation |
 
 ---

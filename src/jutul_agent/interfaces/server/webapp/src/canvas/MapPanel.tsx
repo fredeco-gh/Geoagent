@@ -931,13 +931,9 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                     <tr><td>Bygningsstatus</td><td>{selectedBuilding.bygningsstatus ? escapeHtml(selectedBuilding.bygningsstatus) : "?"}</td></tr>
                     <tr><td>Kommunenavn</td><td>{selectedBuilding.kommunenavn ? escapeHtml(selectedBuilding.kommunenavn) : "?"}</td></tr>
                     <tr><td>Kommunenummer</td><td>{selectedBuilding.kommunenummer ? escapeHtml(selectedBuilding.kommunenummer) : "?"}</td></tr>
-                    <tr><td>Latitude</td><td>{selectedBuilding.lat.toFixed(6)}</td></tr>
-                    <tr><td>Longitude</td><td>{selectedBuilding.lon.toFixed(6)}</td></tr>
-                    <tr><td>Distance</td><td>{selectedBuilding.distance_m.toFixed(1)} m</td></tr>
+                    <tr><td>Breddegrad</td><td>{selectedBuilding.lat.toFixed(6)}</td></tr>
+                    <tr><td>Lengdegrad</td><td>{selectedBuilding.lon.toFixed(6)}</td></tr>
                     <tr><td>Bruksareal totalt</td><td>{selectedBuilding.bruksareal_totalt != null ? `${selectedBuilding.bruksareal_totalt} m²` : "?"}</td></tr>
-                    <tr><td>Bruksareal bolig</td><td>{selectedBuilding.bruksareal_til_bolig != null ? `${selectedBuilding.bruksareal_til_bolig} m²` : "?"}</td></tr>
-                    <tr><td>Bruksareal annet</td><td>{selectedBuilding.bruksareal_til_annet != null ? `${selectedBuilding.bruksareal_til_annet} m²` : "?"}</td></tr>
-                    <tr><td>Antall boenheter</td><td>{selectedBuilding.antall_boenheter != null ? selectedBuilding.antall_boenheter : "?"}</td></tr>
                   </tbody>
                 </table>
               </div>
