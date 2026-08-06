@@ -95,6 +95,7 @@ def create_geothermal_map_app() -> Any:
     from capability import (
         make_run_simulation_action,
         make_setup_simulation_action,
+        make_track_params_change_action,
         make_track_selected_well_action,
     )
 
@@ -121,6 +122,7 @@ def create_geothermal_map_app() -> Any:
             "run_simulation": make_run_simulation_action(str(SIMULATION_JL)),
             "setup_simulation": make_setup_simulation_action(str(SIMULATION_JL)),
             "track_selected_well": make_track_selected_well_action(str(SIMULATION_JL)),
+            "track_params_change": make_track_params_change_action(),
             "generate_energy_demands": make_generate_energy_demands_action(),
         },
         # Building click API — must be passed here (not via include_router after

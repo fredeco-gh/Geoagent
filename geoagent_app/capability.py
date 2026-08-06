@@ -1372,6 +1372,35 @@ def make_track_selected_well_action(simulation_jl_path: str):
     return track_selected_well_action
 
 
+def make_track_params_change_action():
+    """Keeps _session_resolved_well_params in sync with the user's form edits.
+
+    Called by MapPanel.tsx whenever a simulation parameter changes, so
+    get_selected_well_params always reflects the current form state rather
+    than the original defaults derived from the well's metadata.
+    No-op when no setup has been resolved yet (nothing to merge into).
+    """
+
+    async def track_params_change_action(
+        session: Session,
+        args: dict[str, Any],
+        _send_wire: Callable[[dict[str, Any]], Awaitable[None]],
+        _queue_ui_event: Callable[[Any], None],
+    ) -> None:
+        parameters = args.get("parameters")
+        if not isinstance(parameters, dict):
+            return
+        existing = _session_resolved_well_params.get(session.session_id)
+        if existing is None:
+            return
+        _session_resolved_well_params[session.session_id] = {
+            **existing,
+            "parameters": {**existing.get("parameters", {}), **parameters},
+        }
+
+    return track_params_change_action
+
+
 def _make_run_borehole_simulation_tool(session: Session):
     @tool
     async def run_borehole_simulation(
