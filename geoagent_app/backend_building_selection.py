@@ -581,7 +581,7 @@ def _sbhub_via_address(building: BuildingInfo, headers: dict) -> BuildingInfo | 
             rf = requests.get(
                 f"{_SBHUB_BASE_URL}/api/v1/elhub-consent/matrikkelunit/bruksenhet/{beid}",
                 headers=headers,
-                timeout=40,
+                timeout=50,
             )
             if rf.ok:
                 return rf.json()
@@ -650,8 +650,6 @@ def get_building_info_from_wfs_click(
     candidates = normalize_building_candidates(gdf, click_lat=lat, click_lon=lon)
     candidates = [c for c in candidates if c.distance_m <= radius_m][:max_candidates]
     selected = candidates[0] if candidates else None
-    if selected is not None:
-        selected = _enrich_with_sbhub(selected)
 
     return BuildingClickResponse(
         hit=selected is not None,
@@ -893,6 +891,31 @@ def api_building_temperature(
 @router.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "source": "Matrikkelen Bygningspunkt WFS", "wfs": WFS_BASE_URL}
+
+
+@router.get("/api/building/floor-area")
+def api_building_floor_area(
+    bygningsnummer: str = Query(...),
+    lat: float = Query(...),
+    lon: float = Query(...),
+    kommunenummer: str | None = Query(None),
+) -> dict:
+    """Look up bruksareal for a building via SBHub. Called by the 'Look up floor area' button."""
+    building = BuildingInfo(
+        bygningsnummer=bygningsnummer,
+        lat=lat,
+        lon=lon,
+        distance_m=0.0,
+        kommunenummer=kommunenummer,
+    )
+    enriched = _enrich_with_sbhub(building)
+    if enriched.bruksareal_totalt is None:
+        raise HTTPException(status_code=404, detail="Could not retrieve floor area from SBHub.")
+    return {
+        "bruksareal_totalt": enriched.bruksareal_totalt,
+        "bruksareal_totalt_estimated": enriched.bruksareal_totalt_estimated,
+        "antall_boenheter": enriched.antall_boenheter,
+    }
 
 
 @router.get("/api/building/default-floor-area")
