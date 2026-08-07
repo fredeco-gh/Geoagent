@@ -16,31 +16,6 @@ from pyproj import Transformer
 WFS_BASE_URL = "https://wfs.geonorge.no/skwms1/wfs.matrikkelen-bygningspunkt"
 _SBHUB_BASE_URL = "https://sbhub-api.sbhub.no"
 
-# Municipalities where SBHub's matrikkel endpoint has data. For all others the
-# matrikkel/bruksenhet call times out; gating on this set avoids the wasted wait.
-# Derived from GET /api/v1/matrikkel/kommune cross-referenced with /api/v1/matrikkel/bygning.
-_MATRIKKEL_KOMMUNENUMMER: frozenset[str] = frozenset(
-    {
-        "1119",  # Hå
-        "1121",  # Time
-        "1122",  # Gjesdal
-        "3107",  # Fredrikstad
-        "3110",  # Hvaler
-        "3122",  # Marker
-        "3124",  # Aremark
-        "3203",  # Asker
-        "3232",  # Nittedal
-        "3407",  # Gjøvik
-        "3411",  # Ringsaker
-        "3443",  # Vestre Toten
-        "4003",  # Skien
-        "4602",  # Kinn
-        "4631",  # Alver
-        "4632",  # Austrheim
-        "5057",  # Ørland
-        "5058",  # Åfjord
-    }
-)
 
 # UTM zone 33 is used as the default; could be chosen dynamically based on longitude.
 DEFAULT_EPSG = 25833
@@ -83,6 +58,7 @@ class BuildingInfo(BaseModel):
 
     # Placeholders for future MatrikkelAPI extended access
     bruksareal_totalt: float | None = None
+    bruksareal_totalt_estimated: bool | None = None  # True if any unit had zero area
     bruksareal_til_bolig: float | None = None
     bruksareal_til_annet: float | None = None
     antall_boenheter: int | None = None
@@ -396,6 +372,20 @@ def normalize_building_candidates(
     return results
 
 
+def _estimate_total_bruksareal(areas: list[float], total_units: int) -> tuple[float | None, bool]:
+    """Return (estimated_total, is_estimated).
+
+    Fills in the average of non-zero units for any unit reporting zero area.
+    is_estimated is True whenever at least one unit had zero area.
+    Returns (None, False) when all areas are zero (no data at all).
+    """
+    nonzero = [a for a in areas if a > 0]
+    if not nonzero:
+        return None, False
+    avg = sum(nonzero) / len(nonzero)
+    return avg * total_units, len(nonzero) < total_units
+
+
 def _sbhub_direct(building: BuildingInfo, headers: dict) -> BuildingInfo | None:
     """SBHub path 1: bygningsnummer → bygning_id → bruksenhet list (4 municipalities)."""
     try:
@@ -418,7 +408,7 @@ def _sbhub_direct(building: BuildingInfo, headers: dict) -> BuildingInfo | None:
     try:
         r2 = requests.get(
             f"{_SBHUB_BASE_URL}/api/v1/matrikkel/bruksenhet",
-            params={"bygning_id": bygning_id, "limit": 1000},
+            params={"bygg_id": bygning_id, "limit": 1000},
             headers=headers,
             timeout=10,
         )
@@ -429,11 +419,13 @@ def _sbhub_direct(building: BuildingInfo, headers: dict) -> BuildingInfo | None:
     bruksenheter = r2.json().get("items") or []
     if not bruksenheter:
         return None
-    totalt = sum(float(be.get("bruksareal") or 0) for be in bruksenheter)
-    print(f"[SBHub] direct: {len(bruksenheter)} units, totalt={totalt}")
+    areas = [float(be.get("bruksareal") or 0) for be in bruksenheter]
+    totalt, estimated = _estimate_total_bruksareal(areas, len(bruksenheter))
+    print(f"[SBHub] direct: {len(bruksenheter)} units, totalt={totalt}, estimated={estimated}")
     return building.model_copy(
         update={
-            "bruksareal_totalt": totalt if totalt > 0 else None,
+            "bruksareal_totalt": totalt,
+            "bruksareal_totalt_estimated": estimated if totalt is not None else None,
             "antall_boenheter": len(bruksenheter),
         }
     )
@@ -451,7 +443,7 @@ def _sbhub_via_address(building: BuildingInfo, headers: dict) -> BuildingInfo | 
     try:
         rg = requests.get(
             "https://ws.geonorge.no/adresser/v1/punktsok",
-            params={"lat": building.lat, "lon": building.lon, "radius": 20, "treffPerSide": 1},
+            params={"lat": building.lat, "lon": building.lon, "radius": 50, "treffPerSide": 1},
             timeout=10,
         )
     except Exception as exc:
@@ -496,39 +488,42 @@ def _sbhub_via_address(building: BuildingInfo, headers: dict) -> BuildingInfo | 
         return None
     print(f"[SBHub] matrikkelenhet_id={matrikkelenhet_id}")
 
-    # Step 3 (fast path, only for SBHub matrikkel-covered municipalities):
-    # matrikkel/bruksenhet?matrikkelenhet_id=X — one request, bruksareal included.
-    # Skipped for all other municipalities where this endpoint times out.
-    if building.kommunenummer in _MATRIKKEL_KOMMUNENUMMER:
-        try:
-            rm = requests.get(
-                f"{_SBHUB_BASE_URL}/api/v1/matrikkel/bruksenhet",
-                params={"matrikkelenhet_id": matrikkelenhet_id, "limit": 1000},
-                headers=headers,
-                timeout=5,
-            )
-            if rm.ok:
-                matrikkel_items = rm.json().get("items") or []
-                if matrikkel_items:
-                    bygg_ids = {it.get("bygg_id") for it in matrikkel_items if it.get("bygg_id")}
-                    if len(bygg_ids) == 1:
-                        totalt = sum(float(it.get("bruksareal") or 0) for it in matrikkel_items)
-                        print(
-                            f"[SBHub] matrikkel fast path: {len(matrikkel_items)} units,"
-                            f" totalt={totalt}"
-                        )
-                        return building.model_copy(
-                            update={
-                                "bruksareal_totalt": totalt if totalt > 0 else None,
-                                "antall_boenheter": len(matrikkel_items),
-                            }
-                        )
+    # Step 3 (fast path): matrikkel/bruksenhet?matrikkelenhet_id=X — one request,
+    # bruksareal included. Tried for all municipalities; fails fast with a short
+    # timeout for those where the endpoint has no data.
+    try:
+        rm = requests.get(
+            f"{_SBHUB_BASE_URL}/api/v1/matrikkel/bruksenhet",
+            params={"matrikkelenhet_id": matrikkelenhet_id, "limit": 1000},
+            headers=headers,
+            timeout=5,
+        )
+        if rm.ok:
+            matrikkel_items = rm.json().get("items") or []
+            if matrikkel_items:
+                bygg_ids = {it.get("bygg_id") for it in matrikkel_items if it.get("bygg_id")}
+                if len(bygg_ids) == 1:
+                    areas = [float(it.get("bruksareal") or 0) for it in matrikkel_items]
+                    totalt, estimated = _estimate_total_bruksareal(areas, len(matrikkel_items))
                     print(
-                        f"[SBHub] matrikkel fast path: {len(bygg_ids)} bygg_ids on parcel"
-                        f" — falling through to bruksenhet-search"
+                        f"[SBHub] matrikkel fast path: {len(matrikkel_items)} units,"
+                        f" totalt={totalt}, estimated={estimated}"
                     )
-        except Exception as exc:
-            print(f"[SBHub] matrikkel fast path failed: {exc}")
+                    return building.model_copy(
+                        update={
+                            "bruksareal_totalt": totalt,
+                            "bruksareal_totalt_estimated": estimated
+                            if totalt is not None
+                            else None,
+                            "antall_boenheter": len(matrikkel_items),
+                        }
+                    )
+                print(
+                    f"[SBHub] matrikkel fast path: {len(bygg_ids)} bygg_ids on parcel"
+                    f" — falling through to bruksenhet-search"
+                )
+    except Exception as exc:
+        print(f"[SBHub] matrikkel fast path failed: {exc}")
 
     # Step 4: bruksenhet-search filtered by house_number + house_letter to isolate
     # units belonging to the clicked building (not neighbours on the same parcel).
@@ -586,7 +581,7 @@ def _sbhub_via_address(building: BuildingInfo, headers: dict) -> BuildingInfo | 
             rf = requests.get(
                 f"{_SBHUB_BASE_URL}/api/v1/elhub-consent/matrikkelunit/bruksenhet/{beid}",
                 headers=headers,
-                timeout=3,
+                timeout=40,
             )
             if rf.ok:
                 return rf.json()
@@ -602,12 +597,17 @@ def _sbhub_via_address(building: BuildingInfo, headers: dict) -> BuildingInfo | 
     if not fetched:
         print(f"[SBHub] all {len(be_ids)} individual bruksenhet fetches failed")
         return None
-    totalt = sum(float(be.get("bruksareal") or 0) for be in fetched)
-    print(f"[SBHub] {len(fetched)}/{len(be_ids)} units fetched, totalt={totalt}")
+    areas = [float(be.get("bruksareal") or 0) for be in fetched]
+    totalt, estimated = _estimate_total_bruksareal(areas, len(be_ids))
+    print(
+        f"[SBHub] {len(fetched)}/{len(be_ids)} units fetched,"
+        f" totalt={totalt}, estimated={estimated}"
+    )
     return building.model_copy(
         update={
-            "bruksareal_totalt": totalt if totalt > 0 else None,
-            "antall_boenheter": len(fetched),
+            "bruksareal_totalt": totalt,
+            "bruksareal_totalt_estimated": estimated if totalt is not None else None,
+            "antall_boenheter": len(be_ids),
         }
     )
 
