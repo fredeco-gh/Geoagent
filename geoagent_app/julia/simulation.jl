@@ -130,7 +130,7 @@ const PARAM_METADATA = Dict{String,Dict{String,Any}}(
     "flow_rate"                 => Dict{String,Any}("label" => "Flow rate",                 "unit" => "m³/h",    "min" => 1,     "max" => 500,   "step" => 1,     "tooltip" => "Volumetric flow rate",                                       "group" => "Operation"),
     "num_years"                 => Dict{String,Any}("label" => "Simulation years",          "unit" => "yr",      "min" => 1,     "max" => 500,   "step" => 1,     "tooltip" => "Duration of the simulation",                                 "group" => "Simulation"),
     # BTES-specific
-    "num_wells_btes"            => Dict{String,Any}("label" => "Number of wells",           "unit" => "–",       "min" => 4,     "max" => 200,   "step" => 1,     "tooltip" => "Total number of boreholes in the BTES array",                "group" => "BTES Layout"),
+    "num_wells_btes"            => Dict{String,Any}("label" => "Number of wells",           "unit" => "–",       "min" => 1,     "max" => 200,   "step" => 1,     "tooltip" => "Total number of boreholes in the BTES array",                "group" => "BTES Layout"),
     "num_sectors"               => Dict{String,Any}("label" => "Number of sectors",         "unit" => "–",       "min" => 1,     "max" => 20,    "step" => 1,     "tooltip" => "Number of sectors the wells are divided into",               "group" => "BTES Layout"),
     "well_spacing"              => Dict{String,Any}("label" => "Well spacing",              "unit" => "m",       "min" => 2,     "max" => 20,    "step" => 0.5,   "tooltip" => "Horizontal spacing between adjacent boreholes",              "group" => "BTES Layout"),
     "temperature_charge"        => Dict{String,Any}("label" => "Charge temperature",        "unit" => "°C",      "min" => 30,    "max" => 150,   "step" => 1,     "tooltip" => "Injection temperature during charging",                      "group" => "Operation"),
@@ -430,6 +430,8 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
                 temperature_surface  = Fimbul.convert_to_si(params["surface_temperature"], :Celsius),
                 geothermal_gradient  = params["geothermal_gradient"] * Fimbul.Kelvin / Fimbul.meter,
                 num_years            = round(Int, params["num_years"]),
+                charge_period        = ["April", "September"],
+                discharge_period     = ["October", "March"],
             )
         else
             return Dict("status" => "error", "message" => "Unknown case type: $case_type")
@@ -448,31 +450,32 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
                 presolve_wells  = true,
                 relaxation      = true,
                 tol_cnv         = 1e-2,
-                tol_mb          = 1e-6,
+                tol_mb          = 1e-3,
                 tol_cnve_well   = Inf,
                 inc_tol_dT      = 1e-2,
                 timesteps       = :auto,
-                initial_dt      = 5.0,
+                initial_dt      = 3600.0,
                 target_its      = 10,
                 info_level      = -1,
             )
             local _btes_sel = JutulDarcy.ControlChangeTimestepSelector(
-                case.model, 0.0, Fimbul.convert_to_si(5.0, :second))
+                case.model, 0.0, Fimbul.convert_to_si(1.0, :hour))
             push!(_btes_cfg[:timestep_selectors], _btes_sel)
-            _btes_cfg[:timestep_max_decrease] = 1e-6
+            _btes_cfg[:timestep_max_decrease] = 1e-3
             results = Fimbul.simulate_reservoir(case;
                 simulator = _btes_sim,
                 config    = _btes_cfg,
-                info_level = -1,
+                info_level = 0,
             )
         else
-            results = Fimbul.simulate_reservoir(case; info_level = -1)
+            results = Fimbul.simulate_reservoir(case; info_level = 0)
         end
 
         if isempty(results.states)
             return Dict{String,Any}(
                 "status"  => "error",
-                "message" => "Simulation produced no output states — all timesteps failed to converge. Check parameter values or contact support.",
+                "message" => "The simulation could not complete any timesteps — the solver diverged immediately. 
+                Try, e.g., to reduce the number of wells, sectors, or flow rate.",
             )
         end
 
@@ -525,6 +528,13 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
         )
     catch e
         _sim_log_push!("ERROR: $(sprint(showerror, e))")
+        if e isa OutOfMemoryError
+            return Dict{String,Any}(
+                "status"  => "error",
+                "message" => "The simulation ran out of memory. 
+                Try reducing the number of wells, sectors, and/or simulation years.",
+            )
+        end
         return Dict{String,Any}(
             "status"  => "error",
             "message" => "Simulation failed: $(sprint(showerror, e))",

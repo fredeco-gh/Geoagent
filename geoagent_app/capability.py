@@ -758,7 +758,6 @@ select { padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 4px; }
 </style></head><body>
 <h1>__TITLE__</h1>
 <p>__MESSAGE__</p>
-<p><strong>Wells:</strong> __WELLS__ &middot; <strong>Timesteps:</strong> __NUM_STEPS__</p>
 <table>__ROWS__</table>
 
 <h2>Well Output</h2>
