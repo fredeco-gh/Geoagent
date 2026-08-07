@@ -77,7 +77,7 @@ def run(args: argparse.Namespace) -> int:
     sim_name = args.sim or config.simulator or auto_detect_simulator(known_packages_map(), ws)
 
     report = _Report()
-    print(f"jutul-agent doctor - workspace: {ws}\n")
+    print(f"geoagent doctor - workspace: {ws}\n")
 
     julia = _check_julia(report)
     _check_model_and_key(report, _resolve_model_id(config))
@@ -97,12 +97,12 @@ def run(args: argparse.Namespace) -> int:
 
     print()
     if report.worst == FAIL:
-        print("Setup has problems — fix the [FAIL] items above, then re-run `jutul-agent doctor`.")
+        print("Setup has problems — fix the [FAIL] items above, then re-run `geoagent doctor`.")
         return 1
     if report.worst == WARN:
         print("Setup looks usable, but see the [warn] items above.")
         return 0
-    print("All checks passed. You're ready to run `jutul-agent`.")
+    print("All checks passed. You're ready to run `geoagent`.")
     return 0
 
 
@@ -165,7 +165,7 @@ def _check_model_and_key(report: _Report, model_id: str) -> None:
             FAIL,
             "Provider API key",
             f"{env_var} not set for {label}",
-            f"Set it with `jutul-agent key {provider_of(model_id) or '<provider>'}`, add it to "
+            f"Set it with `geoagent key {provider_of(model_id) or '<provider>'}`, add it to "
             "your shell or .env, or pick a model in the app to be prompted for it.",
         )
 
@@ -215,7 +215,7 @@ def _check_simulator(report: _Report, sim_name: str | None) -> str | None:
             FAIL,
             "Simulator",
             "not set and not auto-detected",
-            "Run `jutul-agent init --sim <name>`. Known: " + ", ".join(registry.names()) + ".",
+            "Run `geoagent init`. Known: " + ", ".join(registry.names()) + ".",
         )
         return None
     if sim_name not in registry.names():
@@ -239,7 +239,7 @@ def _check_julia_project(report: _Report, ws: Path) -> Path | None:
             FAIL,
             "Julia project",
             f"no Project.toml at {project}",
-            "Run `jutul-agent init --sim <name>` in this directory.",
+            "Run `geoagent init` in this directory.",
         )
         return None
     detail = f"{project} ({where})"
@@ -278,7 +278,7 @@ def _check_simulator_installed(report: _Report, project: Path | None, sim_name: 
         FAIL,
         f"{pkg} resolved in env",
         f"{pkg} is in Project.toml but not in Manifest.toml (env not instantiated)",
-        f"Run `jutul-agent init --sim {sim_name}` to install it.",
+        "Run `geoagent init` to install it.",
     )
 
 
@@ -306,7 +306,7 @@ def _check_env_template_current(
             WARN,
             "Env template current",
             "built from an older template than the installed jutul-agent",
-            f"Rebuild it with `jutul-agent init --sim {sim_name} --force`.",
+            "Rebuild it with `geoagent init --force`.",
         )
     else:
         report.line(PASS, "Env template current")
@@ -369,7 +369,7 @@ def _check_julia_runs(report: _Report, project: Path) -> None:
         FAIL,
         "Julia runs in env",
         "Julia exited with an error in this env",
-        "Run `jutul-agent init --sim <name> --force` to rebuild the env.",
+        "Run `geoagent init --force` to rebuild the env.",
     )
     if tail:
         print("        Julia said:", file=sys.stderr)

@@ -42,7 +42,7 @@ geoagent                 # open http://127.0.0.1:8740
 
 Run from any folder — no clone needed. Local models through [Ollama](https://ollama.com)
 need no key. `init` only needs to run once; after that `geoagent` starts in seconds.
-`jutul-agent doctor` checks the setup if anything looks wrong.
+`geoagent doctor` checks the setup if anything looks wrong.
 Update with `uv tool install --reinstall "git+https://github.com/fredeco-gh/Geoagent"`.
 
 The app opens at <http://127.0.0.1:8740> and runs locally for a single trusted user.
@@ -63,7 +63,7 @@ The server walks up the directory tree from its install location to find the nea
 
 ### Interactive borehole map
 
-The app opens with an interactive map of Norwegian borehole data sourced from the national registry. Click any marker to select a well or well park; the agent sees the selection immediately and can look up parameters, navigate to the site, or kick off a simulation. You can also do a manual simulation. Click "Setup simulation" to open a sidepanel to type in simulation parameters. Note that it may take a few minutes to load the setup the first time each session. 
+The app opens with an interactive map of Norwegian borehole data sourced from NGU (Norges Geologiske Undersøkelse). Click any marker to select a well or well park; the agent sees the selection immediately and can look up parameters, navigate to the site, or kick off a simulation. You can also do a manual simulation. Click "Setup simulation" to open a sidepanel to type in simulation parameters. Note that it may take a few minutes to load the setup the first time each session. 
 
 ### Building energy needs
 
@@ -86,11 +86,11 @@ Wells and well parks on the map can be simulated directly with [Fimbul.jl](https
 | AGS | Closed-loop single-well Advanced Geothermal System (coaxial borehole) |
 | BTES | Open-loop Borehole Thermal Energy Storage well park (multiple wells, seasonal charge/discharge) |
 
-Results are shown in an interactive report tab: well output time series (temperature, flow rate) and scrubbable 3D reservoir-state images (temperature field, pressure).
+Results are shown in an interactive report tab: well output time series (temperature, flow rate) and 3D reservoir-state images (temperature field, pressure).
 
 ### Fimbul validation
 
-The agent can cross-validate a pygfunction design against a full Fimbul PDE simulation. It runs both models on the same geometry and demand profile, then compares the implied T_out and heat extraction side by side. This gives a physics-grounded check on the g-function approximation before committing to a field design.
+The agent can cross-validate a pygfunction design against a full Fimbul PDE simulation. It runs both models on the same geometry and inlet temperatures, then compares the implied T_out and heat extraction side by side. This gives a check on the g-function approximation before committing to a field design.
 
 ### Recommended workflow for building sites
 
@@ -107,7 +107,7 @@ The split between pygfunction (fast, approximate) and Fimbul (slow, physics-accu
 
 ## Agent tools
 
-The agent has the following extra tools at its disposal in addition to the same capabilities as jutul-agent. They are wired in through `geoagent_app/capability.py` and exposed automatically at session start. This list may be useful to get a sense for what the agent can do. 
+The agent has the following extra tools at its disposal in addition to the capabilities of jutul-agent. They are wired in through `geoagent_app/capability.py` and exposed automatically at session start. This list may be useful to get a sense for what the agent can do. 
 
 ### Map navigation
 
@@ -126,11 +126,11 @@ These tools work alongside the sidebar's **Setup Simulation** and **Run simulati
 | Tool | Description |
 |---|---|
 | `get_selected_well_params()` | Return the Fimbul simulation parameters resolved from the most recently clicked well or well park. Includes `case_type` (AGS or BTES) and all physical parameters derived from the well's registry metadata. Use these as a starting point when the user asks to simulate a specific well. |
-| `view_simulation_result(var, step, delta)` | Inspect a variable from the most recent Fimbul simulation run via the sidebar. For reservoir state variables (e.g. `Temperature`, `Pressure`) renders a 3D image of the spatial field. For well output variables (e.g. `temperature`, `AqueousMassRate`) returns a time series. Pass `delta=True` to show change from the initial state rather than the absolute value. |
+| `view_simulation_result(var, step, delta)` | Inspect a variable from the most recent Fimbul simulation run via the sidebar. For reservoir state variables (e.g. `Temperature`, `Pressure`) renders a 3D image of the spatial field. For well output variables (e.g. `temperature`, `LiquidRate`) returns a time series. Pass `delta=True` to show change from the initial state rather than the absolute value. |
 
 ### Borehole design (pygfunction)
 
-These tools require energy demand data to be available (generated via the sidebar's **Generate energy demands** button for a selected building).
+These tools require energy demand data to be available (generated via the sidebar's **Generate heating needs** button for a selected building).
 
 | Tool | Description |
 |---|---|
@@ -176,7 +176,7 @@ geoagent_app/
                                #   scripts/process_data.jl from the source geodatabase)
 ```
 
-The map panel (`canvas/MapPanel.tsx`) is registered as a native canvas panel in jutul-agent's web UI — not an iframe — so the map and the chat share a single process, a single Julia kernel, and a single session. There is no dedicated Julia server: borehole data is read from disk in-process, and Fimbul simulations run on the same kernel as the rest of the chat.
+The map panel (`canvas/MapPanel.tsx`) is registered as a native canvas panel in jutul-agent's web UI — not an iframe — so the map and the chat share a single process, a single Julia kernel, and a single session. Borehole data is read from disk in-process, and Fimbul simulations run on the same kernel as the rest of the chat.
 
 **Data sources**
 

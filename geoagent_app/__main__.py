@@ -15,6 +15,7 @@ Commands:
   key     Save an LLM provider API key (e.g. geoagent key openai).
   init    Precompile Julia/Fimbul (~10 min, one-time). Run before the first serve.
   serve   Start the Geoagent web server (default if no command given).
+  doctor  Diagnose the workspace setup.
 """
 
 
@@ -29,13 +30,21 @@ def main() -> int:
     if cmd == "init":
         _WORKSPACE.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
-            ["jutul-agent", "init", "--sim", "fimbul"],
+            ["jutul-agent", "init", "--sim", "fimbul", *sys.argv[2:]],
             cwd=_WORKSPACE,
         )
         return result.returncode
 
     if cmd == "key":
         result = subprocess.run(["jutul-agent", "key", *sys.argv[2:]])
+        return result.returncode
+
+    if cmd == "doctor":
+        _WORKSPACE.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["jutul-agent", "doctor", *sys.argv[2:]],
+            cwd=_WORKSPACE,
+        )
         return result.returncode
 
     print(f"Unknown command: {cmd!r}\n{_USAGE}", file=sys.stderr)

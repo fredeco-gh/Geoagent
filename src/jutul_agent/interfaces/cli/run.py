@@ -286,7 +286,7 @@ async def _run_session(
             )
         except JuliaStartupError as exc:
             print(f"\nerror: {exc}", file=sys.stderr)
-            print("Run `jutul-agent doctor` to check your setup.", file=sys.stderr)
+            print("Run `geoagent doctor` to check your setup.", file=sys.stderr)
             return 1
 
 
@@ -307,7 +307,7 @@ def _open_headless_display(stack: Any) -> dict[str, str] | None:
     except Exception as exc:  # Xvfb missing or slow to start; don't block the session.
         print(
             f"warning: could not start a virtual display for plotting ({exc}); "
-            "GLMakie plotting will be unavailable. Run `jutul-agent doctor` for help.",
+            "GLMakie plotting will be unavailable. Run `geoagent doctor` for help.",
             file=sys.stderr,
         )
         return None
@@ -339,7 +339,7 @@ def _warn_if_plotting_unavailable() -> None:
     print(
         "warning: no display and xvfb not available, so plotting (GLMakie) is "
         f"unavailable; simulation still works. To enable plots, {hint}. "
-        "Run `jutul-agent doctor` for details.",
+        "Run `geoagent doctor` for details.",
         file=sys.stderr,
     )
 
@@ -445,7 +445,7 @@ async def _run_with_backend(
                     if agent is None:
                         print(
                             f"error: {model_label} needs {env_var}, which isn't set. "
-                            "Set it (shell env, .env, or `jutul-agent init`) before a "
+                            "Set it (shell env, .env, or `geoagent init`) before a "
                             "headless `--prompt` run.",
                             file=sys.stderr,
                         )

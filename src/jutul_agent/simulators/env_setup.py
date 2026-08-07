@@ -418,7 +418,7 @@ def _rebuild_managed_env(
 
 
 def _warn_rebuild(pkg: str, sim_name: str | None, exc: Exception) -> None:
-    rebuild = "jutul-agent init --force"
+    rebuild = "geoagent init --force"
     if sim_name:
         rebuild += f" --sim {sim_name}"
     print(
@@ -470,7 +470,7 @@ def _sync_workspace_env(
     except EnvSetupError as exc:
         if before is not None:
             project_toml.write_text(before, encoding="utf-8")
-        rebuild = "jutul-agent init --force"
+        rebuild = "geoagent init --force"
         if sim_name:
             rebuild += f" --sim {sim_name}"
         print(
@@ -509,7 +509,7 @@ def _refresh_warm_sources(
     try:
         resolve_and_instantiate(julia_project, precompile=False, capture=True)
     except EnvSetupError as exc:
-        rebuild = "jutul-agent init --force"
+        rebuild = "geoagent init --force"
         if sim_name:
             rebuild += f" --sim {sim_name}"
         print(
@@ -574,7 +574,7 @@ def _reconcile_env_template(
         ensure_env_template_stamp(julia_project, template)
         return
 
-    rebuild = "jutul-agent init --force"
+    rebuild = "geoagent init --force"
     if sim_name:
         rebuild += f" --sim {sim_name}"
     print(
@@ -611,7 +611,7 @@ def _ensure_env_warmed(ws: Path, julia_project: Path, sim_name: str | None) -> N
     try:
         precompile_env(julia_project)
     except EnvSetupError as exc:
-        retry = "jutul-agent init"
+        retry = "geoagent init"
         if sim_name:
             retry += f" --sim {sim_name}"
         print(

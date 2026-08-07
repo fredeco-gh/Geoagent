@@ -546,7 +546,7 @@ export class Controller {
   private notifyDone(body: string): void {
     if (document.hidden && "Notification" in window && Notification.permission === "granted") {
       try {
-        new Notification("jutul-agent", { body });
+        new Notification("geoagent", { body });
       } catch {
         /* best-effort */
       }

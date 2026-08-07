@@ -285,8 +285,8 @@ def notify_at_launch(stream=None) -> None:
     latest = pending_update()
     if latest is not None:
         print(
-            f"A newer jutul-agent is available: {__version__} -> {latest}. "
-            f"Upgrade with `jutul-agent upgrade` (or `{upgrade_command(info)}`).",
+            f"A newer geoagent is available: {__version__} -> {latest}. "
+            'Upgrade with `uv tool install --reinstall "git+https://github.com/fredeco-gh/Geoagent"`.',
             file=stream,
         )
 

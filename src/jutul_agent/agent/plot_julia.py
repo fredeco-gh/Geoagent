@@ -80,7 +80,7 @@ async def _load_plot_backend(session: Session, adapter: SimulatorAdapter) -> str
             f"ERROR: GLMakie could not load in the {adapter.name} Julia environment, so "
             "plotting is unavailable here. On a headless Linux server install xvfb "
             "(jutul-agent auto-detects it) or a GL driver; otherwise rebuild the env with "
-            f"`jutul-agent init --sim {adapter.name} --force`. "
+            "`geoagent init --force`. "
             f"Julia said: {_truncate(gl.error, 300)}"
         )
 

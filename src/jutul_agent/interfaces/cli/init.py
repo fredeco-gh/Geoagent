@@ -216,8 +216,8 @@ def _maybe_prompt_for_provider_key(config: WorkspaceConfig) -> None:
         provider = model_id.partition(":")[0]
         print(
             f"\nNote: {label} needs {env_var}, which isn't set. Set it with "
-            f"`jutul-agent key {provider}`, add it to your shell or a .env, or launch "
-            "`jutul-agent` and pick a model to be prompted for it.",
+            f"`geoagent key {provider}`, add it to your shell or a .env, or launch "
+            "`geoagent` and pick a model to be prompted for it.",
             file=sys.stderr,
         )
         return
@@ -232,7 +232,7 @@ def _maybe_prompt_for_provider_key(config: WorkspaceConfig) -> None:
         return
     if not value:
         print(
-            "Skipped. Set it later with `jutul-agent key <provider>`, the model selector, "
+            "Skipped. Set it later with `geoagent key <provider>`, the model selector, "
             "a .env, or your shell."
         )
         return
