@@ -179,9 +179,9 @@ def test_notify_prints_when_update_pending(monkeypatch, capsys) -> None:
     u._write_cache("9.9.9")
     u.notify_at_launch()
     err = capsys.readouterr().err
-    assert "newer jutul-agent is available" in err
+    assert "newer geoagent is available" in err
     assert "9.9.9" in err
-    assert "jutul-agent upgrade" in err
+    assert "uv tool install --reinstall" in err
 
 
 def test_notify_silent_when_current(monkeypatch, capsys) -> None:

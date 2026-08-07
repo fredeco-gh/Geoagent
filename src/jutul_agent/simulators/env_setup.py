@@ -56,7 +56,7 @@ def manifest_has_package(julia_project: Path, package: str) -> bool:
     (deps edited, or a template merged, without a follow-up ``Pkg.resolve`` /
     ``Pkg.instantiate``). Such a package is *declared* but not installed, and
     ``using <package>`` then fails at runtime with "is required but does not
-    seem to be installed", even though ``jutul-agent doctor``'s Julia-runs check
+    seem to be installed", even though ``geoagent doctor``'s Julia-runs check
     passes. Inspecting the manifest catches that before launch.
     """
 
@@ -526,7 +526,7 @@ def _ensure_simulator_installed(
 ) -> None:
     """Install the simulator package if the env declares but never resolved it.
 
-    Catches the "`jutul-agent doctor` is happy but `using <Sim>` fails" trap:
+    Catches the "`geoagent doctor` is happy but `using <Sim>` fails" trap:
     the Project lists the package but the Manifest never resolved it, so it
     loads neither at startup nor in the agent's first call. Cheap when the env
     is healthy (a manifest read); only pays the install cost when needed. If
