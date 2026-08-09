@@ -1,3 +1,7 @@
+# DEAD CODE — not imported anywhere in the app.
+# Temperature data from ERA5-Land is fetched via Open-Meteo (open_meteo_timeseries.py) instead,
+# which requires no API key or local CDS client setup.
+
 from __future__ import annotations
 
 import os

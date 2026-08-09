@@ -1536,6 +1536,7 @@ def _make_run_borehole_simulation_tool(session: Session):
                     ),
                     COP=COP,
                     G=G,
+                    year=demand.get("year"),
                 ),
             )
         except Exception as exc:
@@ -1846,6 +1847,7 @@ def _make_sweep_borehole_parameters_tool(session: Session):
                     ),
                     COP=c_COP,
                     G=c_G,
+                    year=demand.get("year"),
                 )
                 df_result, _, _ = await asyncio.get_event_loop().run_in_executor(None, _call)
                 T_in = df_result["T_in"].tolist()
@@ -2508,7 +2510,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
 
         demand = get_session_demand_data(session.session_id)
         if demand is None:
-            return "No demand data found. Click 'Generate energy demands' first."
+            return "No demand data found. Click 'Generate heating needs' first."
 
         df = pd.DataFrame({"time": demand["timestamps"], "kW": demand["demand_kw"]})
         if pattern == "rectangular":
@@ -2537,6 +2539,7 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
                     ),
                     COP=COP,
                     G=G,
+                    year=demand.get("year"),
                 ),
             )
         except Exception as exc:
@@ -2546,7 +2549,9 @@ def _make_run_fimbul_validation_tool(session: Session, simulation_jl_path: str):
             df_result["T_in"].tolist(), window_hours=window_hours
         )
 
-        T_surface = fetch_mean_surface_temperature(demand["lat"], demand["lon"])
+        _year = demand.get("year")
+        _ts_kw = {"start_year": _year, "end_year": _year} if _year is not None else {}
+        T_surface = fetch_mean_surface_temperature(demand["lat"], demand["lon"], **_ts_kw)
         fluid = FluidParams()
         fl = gt.media.Fluid(fluid.fluid_name, fluid.concentration)
         freeze_point_C = fl.fluid.t_min

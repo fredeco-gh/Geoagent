@@ -539,6 +539,7 @@ def simulate_borehole_temperatures(
     ground: GroundParams | None = None,
     COP: float = 3.5,
     G: float = 0.03,
+    year: int | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Compute hourly fluid temperatures in a borehole field from a building thermal demand.
 
@@ -639,7 +640,8 @@ def simulate_borehole_temperatures(
     # Computed after the field is built so we can use each borehole's actual H, D,
     # and tilt in the length-weighted average (PDF formula for multi-borehole fields).
     if lat is not None and lon is not None:
-        T_surface = fetch_mean_surface_temperature(lat, lon)
+        kw = {"start_year": year, "end_year": year} if year is not None else {}
+        T_surface = fetch_mean_surface_temperature(lat, lon, **kw)
     else:
         T_surface = 7.0  # Oslo annual mean — fallback when no location is given
     T_g = compute_field_undisturbed_ground_temperature(T_surface, boreholes_gt, G)

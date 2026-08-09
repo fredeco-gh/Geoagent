@@ -47,15 +47,18 @@ Update with `uv tool install --reinstall "git+https://github.com/fredeco-gh/Geoa
 
 The app opens at <http://127.0.0.1:8740> and runs locally for a single trusted user.
 
-**API keys.** Place a `.env` file anywhere above your working directory with the key for your chosen LLM provider:
+**API keys.** Create a `.env` file with the key for your chosen LLM provider — no repo clone needed, just create the file yourself:
 
 ```
 OPENAI_API_KEY=sk-...
 # or
 ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: enables floor-area lookup via SBHub (Smart Building Hub)
+SBHUB_API_TOKEN=your-token-here
 ```
 
-The server walks up the directory tree from its install location to find the nearest `.env`.
+Place this file in your home directory (or any parent directory of where you run `geoagent`). The server walks up the directory tree at startup to find the nearest `.env`.
 
 ---
 
@@ -71,7 +74,9 @@ Click a building on the map to select it, then click **Analyze heating needs** i
 
 The app is designed to fetch real hourly demand profiles from the [PROFet API](https://www.sintef.no/en/projects/2019/profet/) — a statistical model of Norwegian building energy use. Ground temperature is derived from ERA5-Land climate normals (1991–2020) at the building's coordinates. The generated profile is then available to the agent's borehole simulation tools.
 
-> **Note:** PROFet requires an API key that is not included in this repository. Without it, the app falls back to a synthetic heating demand timeseries so the rest of the workflow (borehole simulation, Fimbul validation) can still be exercised. To enable real building energy profiles, add a PROFet API key to your `.env` file once access has been arranged.
+> **Note:** PROFet requires an API key that is not included in this repository. Without it, the app falls back to a synthetic heating demand timeseries so the rest of the workflow (borehole simulation, Fimbul validation) can still be exercised. To enable real building heating profiles, add a PROFet API key to your `.env` file once access has been arranged.
+
+> **Note:** The **Look up floor area** button in the heating panel retrieves usable floor area (bruksareal) from SBHub (Smart Building Hub). This requires an `SBHUB_API_TOKEN` in your `.env` file. Without it the lookup returns an error, but the rest of the workflow is unaffected — you can still use the default synthetic floor area or enter a value manually.
 
 ### Borehole field simulation (pygfunction)
 
