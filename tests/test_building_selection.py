@@ -125,14 +125,15 @@ def _address_chain(
 ) -> list[MagicMock]:
     """Build the responses common to address-path tests (no matrikkel fast path).
 
-    Default buildings have no kommunenummer, so the fast path is skipped.
-    Tests that exercise the fast path must build their own response list with
-    a building that has a kommunenummer in _MATRIKKEL_KOMMUNENUMMER.
+    The code always attempts the matrikkel fast path (Step 3) regardless of
+    kommunenummer; an empty items response makes it fall through to the
+    bruksenhet-search (Step 4).
     """
     return [
-        _punktsok_resp(),  # nummer=5, bokstav=None
-        _resp({"results": [{"matrikkelenhet_id": _PARCEL_ID}]}),
-        _be_search_resp(search_units),
+        _punktsok_resp(),  # Step 1: punktsok
+        _resp({"results": [{"matrikkelenhet_id": _PARCEL_ID}]}),  # Step 2: address search
+        _resp({"items": []}),  # Step 3: matrikkel fast path — no data, fall through
+        _be_search_resp(search_units),  # Step 4: bruksenhet-search
     ]
 
 
@@ -186,6 +187,7 @@ def test_address_filters_by_house_letter_when_present():
     responses = [
         _punktsok_resp(nummer=5, bokstav="A"),  # clicked building is 5A
         _resp({"results": [{"matrikkelenhet_id": _PARCEL_ID}]}),  # address → matrikkelenhet
+        _resp({"items": []}),  # matrikkel fast path — no data, fall through
         _be_search_resp(search_units),
         _resp({"bruksareal": 50.0}),
         _resp({"bruksareal": 55.0}),
@@ -342,6 +344,7 @@ def test_enrich_falls_back_to_address_path_when_direct_finds_nothing(monkeypatch
         _resp({"items": []}),  # direct: not in SBHub
         _punktsok_resp(),  # address path: geocode
         _resp({"results": [{"matrikkelenhet_id": 300}]}),  # address → matrikkelenhet
+        _resp({"items": []}),  # matrikkel fast path — no data, fall through
         _be_search_resp([(42, 5, None)]),  # bruksenhet-search
         _resp({"bruksareal": 65.0}),  # elhub individual fetch
     ]
