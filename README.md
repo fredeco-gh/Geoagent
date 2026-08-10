@@ -50,15 +50,20 @@ The app opens at <http://127.0.0.1:8740> and runs locally for a single trusted u
 **API keys.** Create a `.env` file with the key for your chosen LLM provider — no repo clone needed, just create the file yourself:
 
 ```
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=your-key-here
 # or
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=your-key-here
+# or
+GOOGLE_API_KEY=your-key-here
+
+# Optional: enables real building heating demand profiles via PROFet
+PROFET_API_TOKEN=your-token-here
 
 # Optional: enables floor-area lookup via SBHub (Smart Building Hub)
 SBHUB_API_TOKEN=your-token-here
 ```
 
-Place this file in your home directory (or any parent directory of where you run `geoagent`). The server walks up the directory tree at startup to find the nearest `.env`.
+Place this file in your home directory. 
 
 ---
 
@@ -72,19 +77,19 @@ The app opens with an interactive map of Norwegian borehole data sourced from NG
 
 Click a building on the map to select it, then click **Analyze heating needs** in the sidebar to open the heating panel. There you can configure the simulation year, building type, usable floor area, energy efficiency class, and demand type (space heating, domestic hot water, or combined). Click **Generate heating needs** to run the computation.
 
-The app is designed to fetch real hourly demand profiles from the [PROFet API](https://www.sintef.no/en/projects/2019/profet/) — a statistical model of Norwegian building energy use. Ground temperature is derived from ERA5-Land climate normals (1991–2020) at the building's coordinates. The generated profile is then available to the agent's borehole simulation tools.
+The app is designed to fetch real hourly demand profiles from the [PROFet API](https://flexibilitysuite.byggforsk.no/ModelingToolsZEN_PROFet.pdf) — a statistical model of Norwegian building energy use. Ground temperature is derived from ERA5-Land climate normals (1991–2020) at the building's coordinates. The generated profile is then available to the agent's borehole simulation tools.
 
-> **Note:** PROFet requires an API key that is not included in this repository. Without it, the app falls back to a synthetic heating demand timeseries so the rest of the workflow (borehole simulation, Fimbul validation) can still be exercised. To enable real building heating profiles, add a PROFet API key to your `.env` file once access has been arranged.
+> **Note:** PROFet requires an API key that is not included in this repository. Without it, the app falls back to a synthetic heating demand timeseries so the rest of the workflow (borehole simulation, Fimbul validation) can still be exercised. To enable PROFet building heating profiles, set `PROFET_API_TOKEN=your-key` in your `.env` file once access has been arranged. Moreover, you must write code in `geoagent_app/energy_demand.py` to generate the heating profile timeseries from the PROFet results on the basis of its response format. 
 
 > **Note:** The **Look up floor area** button in the heating panel retrieves usable floor area (bruksareal) from SBHub (Smart Building Hub). This requires an `SBHUB_API_TOKEN` in your `.env` file. Without it the lookup returns an error, but the rest of the workflow is unaffected — you can still use the default synthetic floor area or enter a value manually.
 
 ### Borehole field simulation (pygfunction)
 
-Given a building's demand profile, the agent can design a borehole heat exchanger field — specifying the number of boreholes, depth, spacing, pattern, and thermal properties — and run a [pygfunction](https://github.com/MassimoCimmino/pygfunction) g-function simulation to predict hourly carrier-fluid temperatures (T_in and T_out) over the full demand period. The agent warns when T_in drops below 0 °C (freeze risk). Pattern options are rectangular, sunflower, circular, and polygonal, with optional per-borehole overrides for geometry.
+Given a building's demand profile, the agent can design a borehole heat exchanger field — specifying the number of boreholes, depth, spacing, pattern, and thermal properties — and run a [pygfunction](https://github.com/MassimoCimmino/pygfunction) g-function simulation to predict hourly carrier-fluid inlet/outlet temperatures (T_in and T_out) over the full demand period. The agent warns when T_in drops below 0 °C (freeze risk). Pattern options are rectangular, sunflower, circular, and polygonal, with optional per-borehole overrides.
 
 ### Fimbul reservoir simulation
 
-Wells and well parks on the map can be simulated directly with [Fimbul.jl](https://github.com/fredeco-gh/Fimbul), a physics-based PDE simulator for geothermal systems built on [JutulDarcy.jl](https://github.com/sintefmath/JutulDarcy.jl). Click a well to auto-populate simulation parameters from its metadata, then click **Run simulation** in the sidebar or ask the agent to run it. Supported configurations:
+Wells and well parks on the map can be simulated directly with [Fimbul.jl](https://github.com/fredeco-gh/Fimbul), a physics-based PDE simulator for geothermal systems built on [JutulDarcy.jl](https://github.com/sintefmath/JutulDarcy.jl). Click a well to auto-populate simulation parameters from its metadata, then click **Run simulation** in the sidebar or ask the agent to run a simulation. Supported configurations:
 
 | Case type | Description |
 |---|---|
@@ -103,7 +108,7 @@ The intended end-to-end workflow for finding and validating an optimal borehole 
 
 1. **Select a building** on the map and generate its heating demand profile (**Analyze heating needs** → **Generate heating needs**).
 2. **Explore geometries with pygfunction.** Ask the agent to sweep across candidate field layouts — varying the number of boreholes, depth, spacing, and pattern — using `sweep_borehole_parameters`. pygfunction evaluates each combination quickly via g-functions, making it practical to sample a large design space in a single step.
-3. **Identify promising candidates.** The agent reviews the sweep results (minimum T_in, mean T_out, freeze risk) and narrows the field down to a shortlist of geometries that meet thermal and practical constraints.
+3. **Identify promising candidates.** The agent reviews the sweep results (minimum T_in, mean T_out, freeze risk etc.) and narrows the field down to a shortlist of geometries that meet thermal and practical constraints.
 4. **Validate with Fimbul.** For each candidate, the agent runs a Fimbul validation to check the simplified g-function result against a full PDE reservoir simulation. This confirms whether the design holds up under real subsurface physics before any commitment is made.
 
 The split between pygfunction (fast, approximate) and Fimbul (slow, physics-accurate) is deliberate: pygfunction makes broad exploration feasible, while Fimbul provides the rigour needed for a final design decision.
@@ -139,7 +144,7 @@ These tools require energy demand data to be available (generated via the sideba
 
 | Tool | Description |
 |---|---|
-| `run_borehole_simulation(N_1, N_2, B, H, D, r_b, k_s, k_g, COP, pattern, …, overrides)` | Run a pygfunction U-tube borehole heat exchanger simulation. Computes hourly carrier-fluid temperatures T_in and T_out for a borehole field with the given geometry and thermal parameters. Pattern options: `rectangular`, `sunflower`, `circular`, `polygonal`. Warns when daily-average T_in falls below the freezing point of the fluid. It also includes a parameter 'overrides', which allows the agent to override the geometric properties of individual boreholes - such as if the user wants to shift one or more of the boreholes relative to the others, or change its length, tilt, orientation etc. |
+| `run_borehole_simulation(N_1, N_2, B, H, D, r_b, k_s, k_g, COP, pattern, …, overrides)` | Run a pygfunction U-tube borehole heat exchanger simulation. Computes hourly carrier-fluid temperatures T_in and T_out for a borehole field with the given geometry and thermal parameters. Pattern options: `rectangular`, `sunflower`, `circular`, `polygonal`. Warns when daily-average T_in falls below the freezing point of the fluid. It also includes a parameter 'overrides', which allows the user to override the geometric properties of individual boreholes - such as if the user wants to shift one or more of the boreholes relative to the others, or change its length, tilt, orientation etc. |
 | `sweep_borehole_parameters(N_1, N_2, B, H, …, overrides)` | Run pygfunction for every combination of the provided parameter lists (Cartesian product). Returns summary statistics (min/mean/max T_in and T_out) for each combination. Use this when the user asks to compare multiple borehole layouts or find an optimal configuration. This tool also includes the overrides parameter. |
 | `show_borehole_field(N_1, N_2, B, H, pattern, …)` | Visualise a proposed borehole field as 3D cylinders on the map at the selected building's location. Uses the field geometry only — thermal parameters have no effect on the visualisation. |
 
@@ -187,8 +192,8 @@ The map panel (`canvas/MapPanel.tsx`) is registered as a native canvas panel in 
 
 | Source | Used for |
 |---|---|
-| [Matrikkelen / Kartverket](https://www.kartverket.no/) | Building lookups; address geocoding |
-| [PROFet API](https://www.sintef.no/en/projects/2019/profet/) | Hourly building heating demand profiles |
+| [Matrikkelen / Kartverket](https://kartkatalog.geonorge.no/metadata/matrikkelen-norges-offisielle-eiendomsregister/e77e6fdc-591d-4b1b-91b2-bd9d13fb33b7) | Building and address lookups |
+| [PROFet API](https://flexibilitysuite.byggforsk.no/ModelingToolsZEN_PROFet.pdf) | Hourly building heating demand profiles |
 | [ERA5-Land](https://cds.climate.copernicus.eu/) | Climate normals (1991–2020) for undisturbed ground temperature |
 | [Fimbul.jl](https://github.com/fredeco-gh/Fimbul) | PDE reservoir simulation (AGS, BTES) |
 | [pygfunction](https://github.com/MassimoCimmino/pygfunction) | Borehole g-function and U-tube heat exchanger simulation |
@@ -217,13 +222,5 @@ uv tool install .            # installs geoagent and jutul-agent CLIs from the l
 geoagent init                # precompiles Julia/Fimbul into ~/.geoagent/workspace/
 geoagent                     # open http://127.0.0.1:8740
 ```
-
-To regenerate the borehole dataset from the source geodatabase:
-
-```sh
-julia geoagent_app/scripts/process_data.jl
-```
-
-This is an offline, one-time step that writes `geoagent_app/data/all_boreholes.geojson`. The script is not part of the app's runtime.
 
 Developed at [SINTEF](https://www.sintef.no/en/).
