@@ -109,6 +109,7 @@ interface SelectedBuilding {
   lon: number;
   distance_m: number;
   bruksareal_totalt?: number;
+  bruksareal_totalt_estimated?: boolean;
   bruksareal_til_bolig?: number;
   bruksareal_til_annet?: number;
   antall_boenheter?: number;
@@ -353,9 +354,15 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
     "DHW" | "Space heating" | "Total thermal heating"
   >("Total thermal heating");
   const [energyStatus, setEnergyStatus] = useState<SimStatus | null>(null);
+  const [floorAreaLookupStatus, setFloorAreaLookupStatus] = useState<
+    "idle" | "loading" | "found" | "not_found" | "error"
+  >("idle");
+  const [floorAreaEstimated, setFloorAreaEstimated] = useState(false);
 
   // Pre-fill the floor area input whenever the selected building changes.
   useEffect(() => {
+    setFloorAreaLookupStatus("idle");
+    setFloorAreaEstimated(false);
     if (!selectedBuilding) return;
     const code = selectedBuilding.bygningstype_kode;
     if (code == null) {
@@ -963,7 +970,6 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
                     <tr><td>Kommunenummer</td><td>{selectedBuilding.kommunenummer ? escapeHtml(selectedBuilding.kommunenummer) : "?"}</td></tr>
                     <tr><td>Breddegrad</td><td>{selectedBuilding.lat.toFixed(6)}</td></tr>
                     <tr><td>Lengdegrad</td><td>{selectedBuilding.lon.toFixed(6)}</td></tr>
-                    <tr><td>Bruksareal totalt</td><td>{selectedBuilding.bruksareal_totalt != null ? `${selectedBuilding.bruksareal_totalt} m²` : "?"}</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -1256,23 +1262,6 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
             </div>
           )}
           <div className="sim-param-row">
-            <label htmlFor="energy-floor-area">Usable floor area (m²)</label>
-            <div className="sim-param-input-wrap">
-              <input
-                type="number"
-                id="energy-floor-area"
-                className="sim-param-input"
-                value={energyFloorArea}
-                min={1}
-                placeholder="Typical value if empty"
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  setEnergyFloorArea(isNaN(v) || v <= 0 ? "" : v);
-                }}
-              />
-            </div>
-          </div>
-          <div className="sim-param-row">
             <label htmlFor="energy-efficiency">Efficiency level</label>
             <div className="sim-param-input-wrap">
               <select
@@ -1307,6 +1296,72 @@ export function MapPanel({ view, active, reloadToken, onLoaded, onUiEvent, onAct
               </select>
             </div>
           </div>
+          <div className="sim-param-row">
+            <label htmlFor="energy-floor-area">Usable floor area (m²)</label>
+            <div className="sim-param-input-wrap">
+              <input
+                type="number"
+                id="energy-floor-area"
+                className="sim-param-input"
+                value={energyFloorArea}
+                min={1}
+                placeholder="Typical value if empty"
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setEnergyFloorArea(isNaN(v) || v <= 0 ? "" : v);
+                }}
+              />
+            </div>
+          </div>
+          {floorAreaEstimated && energyFloorArea !== "" && (
+            <p className="sim-case-desc" style={{ marginTop: 2, marginBottom: 4, fontSize: "0.78rem" }}>
+              Area estimated (some units had no area data)
+            </p>
+          )}
+          <div style={{ marginBottom: 8 }}>
+            <button
+              className="btn-primary"
+              style={{ width: "100%" }}
+              disabled={floorAreaLookupStatus === "loading" || !selectedBuilding}
+              onClick={() => {
+                if (!selectedBuilding) return;
+                setFloorAreaLookupStatus("loading");
+                const params = new URLSearchParams({
+                  bygningsnummer: selectedBuilding.bygningsnummer,
+                  lat: String(selectedBuilding.lat),
+                  lon: String(selectedBuilding.lon),
+                });
+                if (selectedBuilding.kommunenummer) {
+                  params.set("kommunenummer", selectedBuilding.kommunenummer);
+                }
+                fetch(`/api/building/floor-area?${params}`)
+                  .then((r) => {
+                    if (r.status === 404) { setFloorAreaLookupStatus("not_found"); return null; }
+                    if (!r.ok) { setFloorAreaLookupStatus("error"); return null; }
+                    return r.json();
+                  })
+                  .then((data) => {
+                    if (!data) return;
+                    setEnergyFloorArea(data.bruksareal_totalt ?? "");
+                    setFloorAreaEstimated(data.bruksareal_totalt_estimated === true);
+                    setFloorAreaLookupStatus("found");
+                  })
+                  .catch(() => setFloorAreaLookupStatus("error"));
+              }}
+            >
+              {floorAreaLookupStatus === "loading" ? "Looking up…" : "Look up floor area"}
+            </button>
+          </div>
+          {floorAreaLookupStatus === "not_found" && (
+            <p className="sim-case-desc" style={{ fontSize: "0.78rem" }}>
+              Floor area not found for this building.
+            </p>
+          )}
+          {floorAreaLookupStatus === "error" && (
+            <p className="sim-case-desc" style={{ fontSize: "0.78rem" }}>
+              Lookup failed. Check that SBHUB_API_TOKEN is set.
+            </p>
+          )}
           <div className="sim-actions">
             <button
               className="btn-primary btn-run"

@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from pyproj import Transformer
 
 WFS_BASE_URL = "https://wfs.geonorge.no/skwms1/wfs.matrikkelen-bygningspunkt"
+_SBHUB_BASE_URL = "https://sbhub-api.sbhub.no"
+
 
 # UTM zone 33 is used as the default; could be chosen dynamically based on longitude.
 DEFAULT_EPSG = 25833
@@ -56,6 +58,7 @@ class BuildingInfo(BaseModel):
 
     # Placeholders for future MatrikkelAPI extended access
     bruksareal_totalt: float | None = None
+    bruksareal_totalt_estimated: bool | None = None  # True if any unit had zero area
     bruksareal_til_bolig: float | None = None
     bruksareal_til_annet: float | None = None
     antall_boenheter: int | None = None
@@ -369,6 +372,270 @@ def normalize_building_candidates(
     return results
 
 
+def _estimate_total_bruksareal(areas: list[float], total_units: int) -> tuple[float | None, bool]:
+    """Return (estimated_total, is_estimated).
+
+    Fills in the average of non-zero units for any unit reporting zero area.
+    is_estimated is True whenever at least one unit had zero area.
+    Returns (None, False) when all areas are zero (no data at all).
+    """
+    nonzero = [a for a in areas if a > 0]
+    if not nonzero:
+        return None, False
+    avg = sum(nonzero) / len(nonzero)
+    return avg * total_units, len(nonzero) < total_units
+
+
+def _sbhub_direct(building: BuildingInfo, headers: dict) -> BuildingInfo | None:
+    """SBHub path 1: bygningsnummer → bygning_id → bruksenhet list (4 municipalities)."""
+    try:
+        r = requests.get(
+            f"{_SBHUB_BASE_URL}/api/v1/matrikkel/bygning",
+            params={"bygningsnummer": int(building.bygningsnummer), "limit": 1},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if not r.ok:
+        return None
+    items = r.json().get("items") or []
+    if not items:
+        return None
+    bygning_id = items[0].get("bygning_id")
+    if not bygning_id:
+        return None
+    try:
+        r2 = requests.get(
+            f"{_SBHUB_BASE_URL}/api/v1/matrikkel/bruksenhet",
+            params={"bygg_id": bygning_id, "limit": 1000},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if not r2.ok:
+        return None
+    bruksenheter = r2.json().get("items") or []
+    if not bruksenheter:
+        return None
+    areas = [float(be.get("bruksareal") or 0) for be in bruksenheter]
+    totalt, estimated = _estimate_total_bruksareal(areas, len(bruksenheter))
+    print(f"[SBHub] direct: {len(bruksenheter)} units, totalt={totalt}, estimated={estimated}")
+    return building.model_copy(
+        update={
+            "bruksareal_totalt": totalt,
+            "bruksareal_totalt_estimated": estimated if totalt is not None else None,
+            "antall_boenheter": len(bruksenheter),
+        }
+    )
+
+
+def _sbhub_via_address(building: BuildingInfo, headers: dict) -> BuildingInfo | None:
+    """SBHub path 2: obtain street address from building location → address search → bruksenheter
+
+    Uses the house_number and house_letter from the search response to isolate units
+    belonging to the specific clicked building, not other buildings on the same parcel.
+    """
+    import concurrent.futures
+
+    # Step 1: obtain street address from building location via Geonorge punktsok
+    try:
+        rg = requests.get(
+            "https://ws.geonorge.no/adresser/v1/punktsok",
+            params={"lat": building.lat, "lon": building.lon, "radius": 50, "treffPerSide": 1},
+            timeout=10,
+        )
+    except Exception as exc:
+        print(f"[SBHub] punktsok failed: {exc}")
+        return None
+    if not rg.ok:
+        print(f"[SBHub] punktsok -> HTTP {rg.status_code}")
+        return None
+    adresser = rg.json().get("adresser") or []
+    if not adresser:
+        print("[SBHub] punktsok: no address found near building")
+        return None
+    a = adresser[0]
+    nummer = str(a.get("nummer") or "")
+    bokstav = (a.get("bokstav") or "").upper()
+    addr = (
+        f"{a.get('adressenavn', '')} {nummer}"
+        f"{bokstav}, {a.get('postnummer', '')} {a.get('poststed', '')}"
+    )
+    print(f"[SBHub] address path: {addr}")
+
+    # Step 2: address → matrikkelenhet_id
+    try:
+        ra = requests.get(
+            f"{_SBHUB_BASE_URL}/api/v1/elhub-consent/matrikkelunit/address",
+            params={"address": addr, "limit": 1},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception as exc:
+        print(f"[SBHub] address search failed: {exc}")
+        return None
+    if not ra.ok:
+        print(f"[SBHub] address search -> HTTP {ra.status_code}")
+        return None
+    ra_results = ra.json().get("results") or []
+    if not ra_results:
+        print("[SBHub] address search: no matrikkelenhet found")
+        return None
+    matrikkelenhet_id = ra_results[0].get("matrikkelenhet_id")
+    if not matrikkelenhet_id:
+        return None
+    print(f"[SBHub] matrikkelenhet_id={matrikkelenhet_id}")
+
+    # Step 3 (fast path): matrikkel/bruksenhet?matrikkelenhet_id=X — one request,
+    # bruksareal included. Tried for all municipalities; fails fast with a short
+    # timeout for those where the endpoint has no data.
+    try:
+        rm = requests.get(
+            f"{_SBHUB_BASE_URL}/api/v1/matrikkel/bruksenhet",
+            params={"matrikkelenhet_id": matrikkelenhet_id, "limit": 1000},
+            headers=headers,
+            timeout=5,
+        )
+        if rm.ok:
+            matrikkel_items = rm.json().get("items") or []
+            if matrikkel_items:
+                bygg_ids = {it.get("bygg_id") for it in matrikkel_items if it.get("bygg_id")}
+                if len(bygg_ids) == 1:
+                    areas = [float(it.get("bruksareal") or 0) for it in matrikkel_items]
+                    totalt, estimated = _estimate_total_bruksareal(areas, len(matrikkel_items))
+                    print(
+                        f"[SBHub] matrikkel fast path: {len(matrikkel_items)} units,"
+                        f" totalt={totalt}, estimated={estimated}"
+                    )
+                    return building.model_copy(
+                        update={
+                            "bruksareal_totalt": totalt,
+                            "bruksareal_totalt_estimated": estimated
+                            if totalt is not None
+                            else None,
+                            "antall_boenheter": len(matrikkel_items),
+                        }
+                    )
+                print(
+                    f"[SBHub] matrikkel fast path: {len(bygg_ids)} bygg_ids on parcel"
+                    f" — falling through to bruksenhet-search"
+                )
+    except Exception as exc:
+        print(f"[SBHub] matrikkel fast path failed: {exc}")
+
+    # Step 4: bruksenhet-search filtered by house_number + house_letter to isolate
+    # units belonging to the clicked building (not neighbours on the same parcel).
+    try:
+        rb = requests.get(
+            f"{_SBHUB_BASE_URL}/api/v1/elhub-consent/matrikkelunit/bruksenhet-search",
+            params={"matrikkelenhet_id": matrikkelenhet_id},
+            headers=headers,
+            timeout=10,
+        )
+    except Exception as exc:
+        print(f"[SBHub] bruksenhet-search failed: {exc}")
+        return None
+    if not rb.ok:
+        print(f"[SBHub] bruksenhet-search -> HTTP {rb.status_code}")
+        return None
+    all_items = rb.json().get("results") or []
+    unique_numbers = sorted(
+        {
+            (str(it.get("house_number") or ""), (it.get("house_letter") or "").upper())
+            for it in all_items
+        }
+    )
+    print(
+        f"[SBHub] bruksenhet-search: {len(all_items)} units on parcel,"
+        f" looking for ({nummer!r}, {bokstav!r}), found: {unique_numbers}"
+    )
+    be_ids = list(
+        dict.fromkeys(
+            item["bruksenhet_id"]
+            for item in all_items
+            if item.get("bruksenhet_id")
+            and str(item.get("house_number") or "") == nummer
+            and (item.get("house_letter") or "").upper() == bokstav
+        )
+    )
+    if not be_ids:
+        print("[SBHub] no bruksenheter matching this building's address")
+        return None
+    raw_count = sum(
+        1
+        for item in all_items
+        if item.get("bruksenhet_id")
+        and str(item.get("house_number") or "") == nummer
+        and (item.get("house_letter") or "").upper() == bokstav
+    )
+    print(
+        f"[SBHub] {len(be_ids)} unique bruksenhet(er) for this building"
+        f" ({raw_count} raw, {len(all_items)} total on parcel)"
+    )
+
+    # Fetch bruksareal for each unit in parallel via the elhub-consent endpoint.
+    def _fetch(beid: int) -> dict | None:
+        try:
+            rf = requests.get(
+                f"{_SBHUB_BASE_URL}/api/v1/elhub-consent/matrikkelunit/bruksenhet/{beid}",
+                headers=headers,
+                timeout=50,
+            )
+            if rf.ok:
+                return rf.json()
+            print(f"[SBHub] elhub bruksenhet/{beid} -> HTTP {rf.status_code}")
+            return None
+        except Exception as exc:
+            print(f"[SBHub] elhub bruksenhet/{beid} failed: {exc}")
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        fetched = [r for r in pool.map(_fetch, be_ids) if r is not None]
+
+    if not fetched:
+        print(f"[SBHub] all {len(be_ids)} individual bruksenhet fetches failed")
+        return None
+    areas = [float(be.get("bruksareal") or 0) for be in fetched]
+    totalt, estimated = _estimate_total_bruksareal(areas, len(be_ids))
+    print(
+        f"[SBHub] {len(fetched)}/{len(be_ids)} units fetched,"
+        f" totalt={totalt}, estimated={estimated}"
+    )
+    return building.model_copy(
+        update={
+            "bruksareal_totalt": totalt,
+            "bruksareal_totalt_estimated": estimated if totalt is not None else None,
+            "antall_boenheter": len(be_ids),
+        }
+    )
+
+
+def _enrich_with_sbhub(building: BuildingInfo) -> BuildingInfo:
+    """Fetch bruksareal from the SBHub Matrikkel API and populate the building's area fields.
+
+    Reads the API token from the SBHUB_API_TOKEN environment variable.
+    Returns the original building unchanged if the token is missing or the API call fails.
+    """
+    import os
+
+    token = os.environ.get("SBHUB_API_TOKEN")
+    if not token:
+        print("[SBHub] SBHUB_API_TOKEN not set — skipping bruksareal lookup")
+        return building
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    print(f"[SBHub] enriching bygningsnummer={building.bygningsnummer}")
+
+    try:
+        result = _sbhub_direct(building, headers) or _sbhub_via_address(building, headers)
+        return result if result is not None else building
+    except Exception as exc:
+        print(f"[SBHub] failed to enrich building {building.bygningsnummer}: {exc}")
+        return building
+
+
 def get_building_info_from_wfs_click(
     lat: float,
     lon: float,
@@ -624,6 +891,31 @@ def api_building_temperature(
 @router.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "source": "Matrikkelen Bygningspunkt WFS", "wfs": WFS_BASE_URL}
+
+
+@router.get("/api/building/floor-area")
+def api_building_floor_area(
+    bygningsnummer: str = Query(...),
+    lat: float = Query(...),
+    lon: float = Query(...),
+    kommunenummer: str | None = Query(None),
+) -> dict:
+    """Look up bruksareal for a building via SBHub. Called by the 'Look up floor area' button."""
+    building = BuildingInfo(
+        bygningsnummer=bygningsnummer,
+        lat=lat,
+        lon=lon,
+        distance_m=0.0,
+        kommunenummer=kommunenummer,
+    )
+    enriched = _enrich_with_sbhub(building)
+    if enriched.bruksareal_totalt is None:
+        raise HTTPException(status_code=404, detail="Could not retrieve floor area from SBHub.")
+    return {
+        "bruksareal_totalt": enriched.bruksareal_totalt,
+        "bruksareal_totalt_estimated": enriched.bruksareal_totalt_estimated,
+        "antall_boenheter": enriched.antall_boenheter,
+    }
 
 
 @router.get("/api/building/default-floor-area")
