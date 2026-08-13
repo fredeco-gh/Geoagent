@@ -107,7 +107,7 @@ The agent can cross-validate a pygfunction design against a full Fimbul PDE simu
 The intended end-to-end workflow for finding and validating an optimal borehole field for a building is:
 
 1. **Select a building** on the map and generate its heating demand profile (**Analyze heating needs** → **Generate heating needs**).
-2. **Explore geometries with pygfunction.** Ask the agent to sweep across candidate field layouts — varying the number of boreholes, depth, spacing, and pattern — using `sweep_borehole_parameters`. pygfunction evaluates each combination quickly via g-functions, making it practical to sample a large design space in a single step.
+2. **Explore geometries with pygfunction.** Describe some objective to the agent, and have it sweep across candidate field layouts to find optimal candidats in accordance with that objective — varying the number of boreholes, depth, spacing, and pattern — using `sweep_borehole_parameters`. pygfunction evaluates each combination quickly via g-functions, making it practical to sample a large configuration space in a single step.
 3. **Identify promising candidates.** The agent reviews the sweep results (minimum T_in, mean T_out, freeze risk etc.) and narrows the field down to a shortlist of geometries that meet thermal and practical constraints.
 4. **Validate with Fimbul.** For each candidate, the agent runs a Fimbul validation to check the simplified g-function result against a full PDE reservoir simulation. This confirms whether the design holds up under real subsurface physics before any commitment is made.
 
