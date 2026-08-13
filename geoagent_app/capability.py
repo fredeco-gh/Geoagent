@@ -1144,7 +1144,7 @@ def _make_view_simulation_result_tool(session: Session, simulation_jl_path: str)
 
 
 def make_run_simulation_action(simulation_jl_path: str):
-    """The direct (non-LLM) counterpart to ``run_simulation``.
+    """The direct (non-LLM) path to well and well park simulations.
 
     For when a front end (the map panel's sidebar) already has exact,
     structured parameters chosen by the user — nothing for the model to

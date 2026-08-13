@@ -141,7 +141,7 @@ const PARAM_METADATA = Dict{String,Dict{String,Any}}(
 """Parameter keys used for each case type, in display order."""
 const CASE_PARAMS = Dict{SimCaseType, Vector{String}}(
     SIM_AGS => [
-        "well_length", "borehole_start_depth", "borehole_diameter",
+        "well_length", "borehole_start_depth",
         "surface_temperature", "geothermal_gradient",
         "rock_thermal_conductivity", "rock_heat_capacity",
         "porosity", "permeability",
@@ -390,8 +390,22 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
         # Note: num_segments controls the 3D wellbore visualisation only
         # and is not passed to the simulator.
         if case_type == "AGS"
-            _sim_log_push!("Creating AGS case with well depth=$(get(params, "well_length", "?"))m...")
+            local _H = Float64(get(params, "well_length", 200.0))
+            local _D = Float64(get(params, "borehole_start_depth", 0.5))
+            local _n = max(3, round(Int, _H / 10) + 1)
+            local _z = collect(range(_D, _D + _H, length=_n))
+            # Injector: top of active section → bottom (z positive downward)
+            local _injector = hcat(zeros(_n), zeros(_n), _z)
+            # Producer: bottom → top of active section. First point at x=0 to share
+            # the junction cell with the injector bottom. Remaining points at
+            # x=hxy_min so they land in a separate mesh cell column.
+            local _x_prod = vcat([0.0], fill(2.0, _n - 1))
+            local _producer = hcat(_x_prod, zeros(_n), reverse(_z))
+            _sim_log_push!("Creating AGS case: H=$(_H)m, D=$(_D)m...")
             case = Fimbul.ags(;
+                well_coords       = [_injector, _producer],
+                well_connectivity = [0 2; 0 0],
+                depths            = [0.0, _D, _D + _H, _D + _H + 100.0],
                 porosity                  = params["porosity"],
                 permeability              = params["permeability"] * 1e-3 * Fimbul.darcy,
                 rock_thermal_conductivity = params["rock_thermal_conductivity"] * Fimbul.watt / (Fimbul.meter * Fimbul.Kelvin),
@@ -401,6 +415,9 @@ function _run_fimbul_live(case_type, params, setup=Dict{String,Any}())
                 rate                      = params["flow_rate"] * Fimbul.meter^3 / Fimbul.hour,
                 temperature_inj           = Fimbul.convert_to_si(params["temperature_inj"], :Celsius),
                 num_years                 = round(Int, params["num_years"]),
+                hxy_min   = 2.0,
+                hxy_max   = 40.0,
+                mesh_args = (offset_rel = 134.0,),
             )
         elseif case_type == "BTES"
             local _H   = Float64(get(params, "well_length", 200.0))
